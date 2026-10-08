@@ -254,9 +254,12 @@ import { Eye, EyeOff } from "lucide-react";
 import { toast } from "react-toastify";
 import { login } from "../api/authApi";
 import { loginSchema } from "../validation/authSchemas";
+import { useDispatch } from "react-redux";
+import { setCredentials } from "../redux/slices/authSlice";
 
 const Login = ({ adminOnly = false }) => {
     const navigate = useNavigate();
+    const dispatch = useDispatch();
 
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -278,13 +281,14 @@ const Login = ({ adminOnly = false }) => {
 
             localStorage.setItem("token", response.data.token);
             localStorage.setItem("user", JSON.stringify(response.data.user));
+            dispatch(setCredentials({ token: response.data.token, user: response.data.user }));
 
             toast.success(response.data.message);
 
             // Role based redirect
             if (role === "parent") {
                 navigate("/parent/dashboard");
-            } else if (role === "daycare") {
+            } else if (["daycare", "manager", "caregiver"].includes(role)) {
                 navigate("/daycare/dashboard");
             } else if (role === "admin") {
                 navigate("/admin/dashboard");

@@ -14,6 +14,8 @@ async function connectDB() {
   mainModels = buildModels(mainConnection, { includeTenant: true });
   await mainModels.Tenant.init();
   await mainModels.User.init();
+  await mainModels.TenantMembership.init();
+  await mainModels.ParentTenantLink.init();
   console.log("MongoDB main_db connected");
   return mainConnection;
 }
@@ -21,8 +23,8 @@ async function connectDB() {
 function buildModels(connection, { includeTenant = false } = {}) {
   const models = {};
   const names = includeTenant
-    ? ["User", "Tenant"]
-    : ["User", "Attendance", "Booking", "Child", "DaycareApplication", "DaycareProfile", "Expense", "Notification", "ParentProfile", "Payment", "Review"];
+    ? ["User", "Tenant", "TenantMembership", "ParentTenantLink"]
+    : ["User", "Attendance", "Booking", "Child", "DaycareApplication", "DaycareProfile", "Expense", "Notification", "ParentProfile", "Payment", "Review", "DaycareParent", "Staff", "StaffAttendance", "ClassGroup", "FeeInvoice", "LeaveRequest", "Complaint", "ParentRequest", "DailyActivity", "PickupAuthorization", "PickupLog", "Announcement", "DaycareEvent", "DaycareDocument", "AuditLog", "DaycareSettings", "CenterNotification"];
   for (const name of names) {
     const schema = require(`../models/${name}`);
     models[name] = connection.models[name] || connection.model(name, schema);

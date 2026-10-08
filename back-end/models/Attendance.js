@@ -33,13 +33,15 @@ child: {
 
     status: {
       type: String,
-      enum: ["present", "absent", "late"],
+      enum: ["present", "absent", "late", "excused"],
       default: "present",
     },
 
     notes: {
       type: String,
     },
+
+    markedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   },
   {
     timestamps: true,

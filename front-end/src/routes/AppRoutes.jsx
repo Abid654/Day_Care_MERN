@@ -1,11 +1,16 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { lazy, Suspense } from "react";
+import ProtectedRoute from "./ProtectedRoute";
 
 import Login from "../pages/Login";
 import Register from "../pages/Register";
-import ParentDashboard from "../pages/ParentDashboard";
-import DaycareDashboard from "../pages/DaycareDashboard";
-import AdminDashboard from "../pages/AdminDashboard";
-import DaycareProfilePage from "../pages/DaycareProfilePage";
+const ParentDashboard = lazy(() => import("../pages/ParentDashboard"));
+const DaycareDashboard = lazy(() => import("../pages/DaycareDashboard"));
+const DaycareManagementDashboard = lazy(() => import("../pages/DaycareManagementDashboard"));
+const AdminDashboard = lazy(() => import("../pages/AdminDashboard"));
+const DaycareProfilePage = lazy(() => import("../pages/DaycareProfilePage"));
+
+const RouteLoading = () => <div className="min-h-screen bg-slate-50" aria-label="Loading page" />;
 
 const AppRoutes = () => {
   return (
@@ -13,11 +18,14 @@ const AppRoutes = () => {
       <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/admin" element={<Login adminOnly />} />
-        <Route path="/admin/dashboard" element={<AdminDashboard />} />
+        <Route path="/admin/dashboard" element={<ProtectedRoute roles={["admin"]}><Suspense fallback={<RouteLoading />}><AdminDashboard /></Suspense></ProtectedRoute>} />
+        <Route path="/admin/daycares/:daycareId" element={<ProtectedRoute roles={["admin"]}><Suspense fallback={<RouteLoading />}><DaycareProfilePage adminView /></Suspense></ProtectedRoute>} />
         <Route path="/register" element={<Register />} />
-        <Route path="/parent/dashboard" element={<ParentDashboard />} />
-        <Route path="/daycares/:daycareId" element={<DaycareProfilePage />} />
-        <Route path="/daycare/dashboard" element={<DaycareDashboard />} />
+        <Route path="/parent/dashboard" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><ParentDashboard /></Suspense></ProtectedRoute>} />
+        <Route path="/daycares/:daycareId" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><DaycareProfilePage /></Suspense></ProtectedRoute>} />
+        <Route path="/daycare/dashboard" element={<ProtectedRoute roles={["daycare", "manager", "caregiver"]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />
+        <Route path="/daycare/dashboard/:module" element={<ProtectedRoute roles={["daycare", "manager", "caregiver"]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />
+        <Route path="/daycare/profile/setup" element={<ProtectedRoute roles={["daycare"]}><Suspense fallback={<RouteLoading />}><DaycareDashboard /></Suspense></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>
   );

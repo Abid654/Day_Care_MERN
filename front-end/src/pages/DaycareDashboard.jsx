@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { FormikProvider, useFormik, useFormikContext } from "formik";
 import { useNavigate } from "react-router-dom";
+import { useDispatch } from "react-redux";
 import { toast } from "react-toastify";
 import { getAssetUrl } from "../api/client";
 import { getDaycareProfile, saveDaycareProfile, uploadDaycarePhoto } from "../api/daycareApi";
 import { daycareStepFields, daycareStepSchemas } from "../validation/daycareSchemas";
+import { clearCredentials } from "../redux/slices/authSlice";
 import {
     Bell,
     CalendarDays,
@@ -24,6 +26,7 @@ import {
 
 const DaycareDashboard = () => {
     const navigate = useNavigate();
+    const dispatch = useDispatch();
     const [profileOpen, setProfileOpen] = useState(false);
     const [profileStep, setProfileStep] = useState(0);
     const [profileSaving, setProfileSaving] = useState(false);
@@ -119,6 +122,7 @@ const DaycareDashboard = () => {
     const handleLogout = () => {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
+        dispatch(clearCredentials());
         navigate("/", { replace: true });
     };
 

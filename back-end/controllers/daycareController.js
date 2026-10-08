@@ -21,7 +21,7 @@ async function listDaycares(req, res) {
       const models = getTenantModels(getTenantConnection(tenant.databaseName));
       const [user, profile] = await Promise.all([
         models.User.findOne({ _id: tenant.ownerUserId, role: "daycare", isActive: true }).select("name phone").lean(),
-        models.DaycareProfile.findOne({ user: tenant.ownerUserId, approvalStatus: "approved", isVerified: true }).select("daycareName description address area phone services fee images isVerified").lean(),
+        models.DaycareProfile.findOne({ user: tenant.ownerUserId, approvalStatus: "approved", isVerified: true }).select("daycareName description address area phone services fee paymentOptions images isVerified").lean(),
       ]);
       if (!user) return null;
       return {
@@ -33,6 +33,7 @@ async function listDaycares(req, res) {
         area: profile?.area || profile?.address || "Location details coming soon",
         services: profile?.services || [],
         fee: profile?.fee ?? null,
+        paymentOptions: profile?.paymentOptions || [],
         images: profile?.images || [],
         isVerified: profile?.isVerified || false,
         profileComplete: Boolean(profile),
@@ -211,6 +212,50 @@ async function listAdminDaycares(req, res) {
   }
 }
 
+async function getAdminDaycare(req, res) {
+  try {
+    const { tenantId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(tenantId)) {
+      return res.status(404).json({ success: false, message: "Daycare registration not found" });
+    }
+    const tenant = await getMainModels().Tenant.findOne({ _id: tenantId, status: "active" })
+      .select("name ownerEmail ownerUserId databaseName listingStatus")
+      .lean();
+    if (!tenant) return res.status(404).json({ success: false, message: "Daycare registration not found" });
+
+    const models = getTenantModels(getTenantConnection(tenant.databaseName));
+    const [user, profile] = await Promise.all([
+      models.User.findOne({ _id: tenant.ownerUserId, role: "daycare" }).select("name email phone isActive").lean(),
+      models.DaycareProfile.findOne({ user: tenant.ownerUserId }).lean(),
+    ]);
+    return res.json({
+      success: true,
+      daycare: {
+        id: tenant._id,
+        name: profile?.daycareName || tenant.name || user?.name || "Daycare",
+        ownerEmail: user?.email || tenant.ownerEmail,
+        contactName: user?.name || tenant.name,
+        phone: profile?.phone || user?.phone || "",
+        isActive: Boolean(user?.isActive),
+        listingStatus: tenant.listingStatus || "pending",
+        profileComplete: Boolean(profile),
+        profile: profile ? {
+          ...profile,
+          qualifications: profile.qualifications || [],
+          training: profile.training || [],
+          services: profile.services || [],
+          facilities: profile.facilities || [],
+          paymentOptions: profile.paymentOptions || [],
+          images: profile.images || [],
+        } : null,
+      },
+    });
+  } catch (error) {
+    console.error("Admin daycare profile error:", error.message);
+    return res.status(503).json({ success: false, message: "Daycare profile is temporarily unavailable" });
+  }
+}
+
 async function reviewDaycare(req, res) {
   try {
     const { tenantId } = req.params;
@@ -242,4 +287,4 @@ async function reviewDaycare(req, res) {
   }
 }
 
-module.exports = { listDaycares, getPublicDaycare, getMyProfile, saveMyProfile, uploadProfilePhoto, listAdminDaycares, reviewDaycare };
+module.exports = { listDaycares, getPublicDaycare, getMyProfile, saveMyProfile, uploadProfilePhoto, listAdminDaycares, getAdminDaycare, reviewDaycare };

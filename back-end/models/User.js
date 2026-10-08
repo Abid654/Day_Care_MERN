@@ -5,6 +5,7 @@ module.exports = new mongoose.Schema({
   email: { type: String, required: [true, "Email is required"], unique: true, lowercase: true, trim: true },
   password: { type: String, required: [true, "Password is required"], minlength: [6, "Password must be at least 6 characters"] },
   phone: { type: String, required: [true, "Phone number is required"], trim: true },
-  role: { type: String, enum: { values: ["parent", "daycare", "admin"], message: "Role must be parent, daycare, or admin" }, required: [true, "Role is required"] },
+  role: { type: String, enum: { values: ["parent", "daycare", "admin", "manager", "caregiver"], message: "Role is invalid" }, required: [true, "Role is required"] },
   isActive: { type: Boolean, default: true },
+  tokenVersion: { type: Number, default: 0 },
 }, { timestamps: true });

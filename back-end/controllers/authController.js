@@ -13,7 +13,7 @@ const registerUser = async (req, res) => {
     if (password !== confirmPassword) return res.status(400).json({ success: false, message: "Passwords do not match" });
     const cleanEmail = email.toLowerCase().trim();
     const mainModels = getMainModels();
-    if (await mainModels.User.exists({ email: cleanEmail }) || await mainModels.Tenant.exists({ ownerEmail: cleanEmail })) {
+    if (await mainModels.User.exists({ email: cleanEmail }) || await mainModels.Tenant.exists({ ownerEmail: cleanEmail }) || await mainModels.TenantMembership.exists({ email: cleanEmail })) {
       return res.status(409).json({ success: false, message: "Email already registered" });
     }
     const userId = new mongoose.Types.ObjectId();
@@ -22,6 +22,8 @@ const registerUser = async (req, res) => {
 
     if (role === "parent") {
       const user = await mainModels.User.create(userDocument);
+      await mainModels.ParentTenantLink.updateMany({ email: cleanEmail, isActive: true, parentUser: null }, { $set: { parentUser: user._id } })
+        .catch((error) => console.error("Parent daycare-link sync failed:", error.message));
       return res.status(201).json({ success: true, message: "Account created successfully", user: publicUser(user) });
     }
 
@@ -56,6 +58,7 @@ const loginUser = async (req, res) => {
     let user = await mainModels.User.findOne({ email: cleanEmail });
     let tenant = null;
     let models = mainModels;
+    let membership = null;
 
     if (!user) {
       tenant = await mainModels.Tenant.findOne({ ownerEmail: cleanEmail, status: "active" }).lean();
@@ -63,15 +66,30 @@ const loginUser = async (req, res) => {
         const connection = getTenantConnection(tenant.databaseName);
         models = getTenantModels(connection);
         user = await models.User.findOne({ email: cleanEmail, role: "daycare" });
+      } else {
+        membership = await mainModels.TenantMembership.findOne({ email: cleanEmail, isActive: true }).lean();
+        if (membership) {
+          tenant = await mainModels.Tenant.findOne({ _id: membership.tenant, status: "active" }).lean();
+          if (tenant) {
+            const connection = getTenantConnection(tenant.databaseName);
+            models = getTenantModels(connection);
+            user = await models.User.findOne({ _id: membership.user, role: membership.role, isActive: true });
+          }
+        }
       }
     }
     if (!user || !user.isActive || !(await bcrypt.compare(password, user.password))) return res.status(401).json({ success: false, message: "Invalid email or password" });
     if ((portal === "admin" && user.role !== "admin") || (portal === "standard" && user.role === "admin")) {
       return res.status(403).json({ success: false, message: portal === "admin" ? "Admin account required" : "Administrators must sign in at /admin" });
     }
-    if (user.role === "daycare" && !tenant) return res.status(403).json({ success: false, message: "Daycare tenant is unavailable" });
-    const token = jwt.sign({ userId: user._id.toString(), role: user.role, ...(tenant ? { tenantId: tenant._id.toString() } : {}) }, process.env.JWT_SECRET, { expiresIn: "1d" });
-    return res.status(200).json({ success: true, message: "Login successful", token, user: publicUser(user) });
+    if (["daycare", "manager", "caregiver"].includes(user.role) && !tenant) return res.status(403).json({ success: false, message: "Daycare tenant is unavailable" });
+    if (["manager", "caregiver"].includes(user.role) && !membership) return res.status(403).json({ success: false, message: "Daycare access is unavailable" });
+    if (membership) await mainModels.TenantMembership.updateOne({ _id: membership._id }, { $set: { lastLoginAt: new Date() } });
+    const token = jwt.sign({ userId: user._id.toString(), role: user.role, tokenVersion: user.tokenVersion || 0, ...(tenant ? { tenantId: tenant._id.toString() } : {}) }, process.env.JWT_SECRET, { expiresIn: "1d" });
+    if (tenant && models.AuditLog) {
+      await models.AuditLog.create({ user: user._id, action: "login", module: "auth", ipAddress: req.ip }).catch((error) => console.error("Login audit write failed:", error.message));
+    }
+    return res.status(200).json({ success: true, message: "Login successful", token, user: { ...publicUser(user), ...(membership ? { permissions: Object.fromEntries(membership.permissions instanceof Map ? membership.permissions : Object.entries(membership.permissions || {})) } : {}) } });
   } catch (error) {
     console.error("Login Error:", error.message);
     return res.status(503).json({ success: false, message: "Authentication service temporarily unavailable" });

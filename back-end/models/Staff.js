@@ -1,0 +1,22 @@
+const mongoose = require("mongoose");
+module.exports = new mongoose.Schema({
+  fullName: { type: String, required: true, trim: true, maxlength: 100 },
+  email: { type: String, trim: true, lowercase: true, maxlength: 254 },
+  phone: { type: String, required: true, trim: true, maxlength: 30 },
+  profilePhoto: { type: String, trim: true },
+  address: { type: String, trim: true, maxlength: 500 },
+  dateOfBirth: Date,
+  gender: { type: String, enum: ["female", "male", "other"] },
+  qualification: { type: String, trim: true, maxlength: 500 },
+  experienceYears: { type: Number, min: 0, default: 0 },
+  joiningDate: { type: Date, default: Date.now },
+  jobTitle: { type: String, trim: true, maxlength: 100 },
+  role: { type: String, enum: ["manager", "caregiver", "nurse", "support"], default: "caregiver" },
+  assignedClass: { type: mongoose.Schema.Types.ObjectId, ref: "ClassGroup" },
+  emergencyContactName: { type: String, trim: true, maxlength: 100 },
+  emergencyContactPhone: { type: String, trim: true, maxlength: 30 },
+  documents: [{ type: String, trim: true }],
+  userAccount: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+  status: { type: String, enum: ["active", "inactive"], default: "active", index: true },
+  createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+}, { timestamps: true });

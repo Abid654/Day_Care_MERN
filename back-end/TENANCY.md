@@ -23,6 +23,16 @@ Use only `req.models` for daycare-specific records. Use `req.mainModels` only fo
 
 The backend currently includes daycare profile and admin review endpoints. Parent accounts are central identities; cross-database relationships to parents need explicit application-level lookups through `req.mainModels` rather than normal Mongoose `populate`.
 
+## Daycare operations dashboard
+
+The owner dashboard uses `/daycare/management/*`. Its children, attendance, fees, staffing, care records, requests, documents, settings, and audit logs are read and written through `req.models` on the active tenant connection. The module controller uses a server-side allowlist for fields and model names, scopes caregiver records to assigned children, and checks class capacity and pickup authorizations on the backend.
+
+Manager and caregiver login credentials are stored as `User` records in their daycare database. `main_db.TenantMembership` stores the email lookup, tenant reference, role, permissions, and active status needed to resolve those accounts at login. JWTs carry the user ID, role, tenant ID, and token version; no database name is accepted from a client. User status changes and password resets revoke prior tokens.
+
+Document files are kept outside the public `/uploads` static directory. Download routes require authentication and resolve the document record inside the current tenant database before reading a server-generated storage key. The manager/caregiver API permissions are enforced by middleware and remain subject to the owner-only restrictions on account administration.
+
+Daycare parent contact records in the tenant database are not yet linked to central parent login accounts. Notification/announcement records are tenant-scoped dashboard data; delivery to parent devices or email requires an explicit parent-account linkage and delivery service integration.
+
 ## Daycare review and parent listings
 
 Daycare owners edit and submit their profile through the authenticated `/daycare/profile` endpoint. A profile edit always resets the tenant directory status to `pending`. Admin-only `/admin/daycares` and `/admin/daycares/:tenantId/review` endpoints use the verified admin JWT role; the database name is still resolved only from the central Tenant record. Approving requires a submitted profile and marks both the tenant directory entry and profile verified. Rejection leaves the daycare able to sign in and edit/resubmit, but `/daycares` returns only active, approved, verified profiles to parents.
