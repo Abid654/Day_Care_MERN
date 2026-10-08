@@ -1,13 +1,11 @@
 const mongoose = require("mongoose");
-
 const daycareProfileSchema = new mongoose.Schema(
   {
-    user: {
+user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
-      unique: true,
-    },
+        },
 
     daycareName: {
       type: String,
@@ -117,4 +115,6 @@ const daycareProfileSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("DaycareProfile", daycareProfileSchema);
+daycareProfileSchema.index({ user: 1 }, { unique: true });
+
+module.exports = daycareProfileSchema;

@@ -1,8 +1,7 @@
 const mongoose = require("mongoose");
-
 const attendanceSchema = new mongoose.Schema(
   {
-    child: {
+child: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Child",
       required: true,
@@ -47,4 +46,6 @@ const attendanceSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Attendance", attendanceSchema);
+
+
+module.exports = attendanceSchema;

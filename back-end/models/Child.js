@@ -1,8 +1,7 @@
 const mongoose = require("mongoose");
-
 const childSchema = new mongoose.Schema(
   {
-    parent: {
+parent: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
@@ -48,4 +47,6 @@ const childSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Child", childSchema);
+
+
+module.exports = childSchema;

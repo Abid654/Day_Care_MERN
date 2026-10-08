@@ -1,8 +1,7 @@
 const mongoose = require("mongoose");
-
 const notificationSchema = new mongoose.Schema(
   {
-    recipient: {
+recipient: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
@@ -40,4 +39,6 @@ const notificationSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Notification", notificationSchema);
+
+
+module.exports = notificationSchema;

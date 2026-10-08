@@ -251,9 +251,9 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { toast } from "react-toastify";
-import axios from "axios";
+import { login } from "../api/authApi";
 
-const Login = () => {
+const Login = ({ adminOnly = false }) => {
     const navigate = useNavigate();
 
     const [formData, setFormData] = useState({
@@ -285,25 +285,20 @@ const Login = () => {
         try {
             setLoading(true);
 
-            const response = await axios.post(
-                "http://localhost:3000/auth/login",
-                formData
-            );
+            const response = await login({ ...formData, portal: adminOnly ? "admin" : "standard" });
 
-            // Save JWT token
+            const role = response.data.user.role;
+            if ((adminOnly && role !== "admin") || (!adminOnly && role === "admin")) {
+                toast.error(adminOnly ? "This sign-in page is for administrators only." : "Administrators must sign in at /admin.");
+                return;
+            }
+
             localStorage.setItem("token", response.data.token);
-
-            // Save user information
-            localStorage.setItem(
-                "user",
-                JSON.stringify(response.data.user)
-            );
+            localStorage.setItem("user", JSON.stringify(response.data.user));
 
             toast.success(response.data.message);
 
             // Role based redirect
-            const role = response.data.user.role;
-
             if (role === "parent") {
                 navigate("/parent/dashboard");
             } else if (role === "daycare") {
@@ -348,12 +343,11 @@ const Login = () => {
                         </div>
 
                         <h1 className="text-3xl font-bold leading-tight">
-                            Welcome Back
+                            {adminOnly ? "Administrator access" : "Welcome Back"}
                         </h1>
 
                         <p className="mt-4 text-indigo-100 leading-relaxed">
-                            Sign in to manage your daycare activities,
-                            bookings, children, and more.
+                            {adminOnly ? "Sign in to manage platform activity and registered daycare providers." : "Sign in to manage your daycare activities, bookings, children, and more."}
                         </p>
 
                     </div>
@@ -400,15 +394,15 @@ const Login = () => {
                     <div className="mb-7">
 
                         <p className="text-xs font-semibold text-sky-600 mb-1">
-                            WELCOME BACK
+                            {adminOnly ? "ADMIN PORTAL" : "WELCOME BACK"}
                         </p>
 
                         <h2 className="text-3xl font-bold text-gray-900">
-                            Sign in to your account
+                            {adminOnly ? "Administrator sign in" : "Sign in to your account"}
                         </h2>
 
                         <p className="text-sm text-gray-500 mt-2">
-                            Enter your details to continue.
+                        {adminOnly ? "Use your platform administrator account to continue." : "Enter your details to continue."}
                         </p>
 
                     </div>
@@ -519,16 +513,17 @@ const Login = () => {
                     {/* Create Account */}
                     <p className="text-center text-sm text-gray-500 mt-7">
 
-                        Don't have an account?{" "}
+                        {adminOnly ? "Not an administrator? " : "Don't have an account? "}
 
                         <Link
-                            to="/register"
+                            to={adminOnly ? "/" : "/register"}
                             className="font-semibold text-sky-600 hover:text-sky-700"
                         >
-                            Create Account
+                            {adminOnly ? "Regular sign in" : "Create Account"}
                         </Link>
 
                     </p>
+                    {!adminOnly && <p className="mt-3 text-center text-xs text-gray-400"><Link to="/admin" className="hover:text-sky-600">Administrator sign in</Link></p>}
 
                 </div>
 

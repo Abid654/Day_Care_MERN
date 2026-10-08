@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import { Eye, EyeOff } from "lucide-react";
-import axios from "axios";
+import { register } from "../api/authApi";
 
 const Register = () => {
     const navigate = useNavigate();
@@ -19,6 +19,16 @@ const Register = () => {
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [registrationComplete, setRegistrationComplete] = useState(false);
+
+    const initialFormData = {
+        name: "",
+        email: "",
+        password: "",
+        confirmPassword: "",
+        phone: "",
+        role: "parent",
+    };
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -41,10 +51,7 @@ const Register = () => {
         try {
             setLoading(true);
 
-            const response = await axios.post(
-                "http://localhost:3000/auth/register",
-                formData
-            );
+            const response = await register(formData);
 
             console.log("Register Response:", response.data);
 
@@ -52,6 +59,9 @@ const Register = () => {
             toast.success(
                 response.data.message || "Account created successfully!"
             );
+
+            setFormData(initialFormData);
+            setRegistrationComplete(true);
 
             // Wait 2 seconds, then navigate to Login page
             setTimeout(() => {
@@ -386,13 +396,20 @@ const Register = () => {
                         {/* Submit */}
                         <button
                             type="submit"
-                            disabled={loading}
+                            disabled={loading || registrationComplete}
                             className="w-full py-3 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 text-white font-bold shadow-lg shadow-sky-200 hover:shadow-xl hover:-translate-y-0.5 transition-all duration-200 disabled:opacity-60 disabled:cursor-not-allowed disabled:hover:translate-y-0"
                         >
+                            {loading && <span className="mr-2 inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white align-middle" />}
                             {loading
                                 ? "Creating Account..."
                                 : "Create Account →"}
                         </button>
+
+                        {registrationComplete && (
+                            <p className="mt-3 text-center text-sm font-medium text-emerald-600">
+                                Account created successfully. Redirecting to sign in...
+                            </p>
+                        )}
 
                     </form>
 

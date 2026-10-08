@@ -29,7 +29,7 @@ const validateRegisterData = (data) => {
 
   if (!role) {
     errors.role = "Role is required";
-  } else if (!["parent", "daycare", "admin"].includes(role)) {
+  } else if (!["parent", "daycare"].includes(role)) {
     errors.role = "Invalid role";
   }
 

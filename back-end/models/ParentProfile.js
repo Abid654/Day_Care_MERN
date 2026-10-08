@@ -1,12 +1,10 @@
 const mongoose = require("mongoose");
-
 const parentProfileSchema = new mongoose.Schema(
     {
-        user: {
+user: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",
             required: true,
-            unique: true,
         },
 
         address: {
@@ -52,4 +50,6 @@ const parentProfileSchema = new mongoose.Schema(
     }
 );
 
-module.exports = mongoose.model("ParentProfile", parentProfileSchema);
+
+
+module.exports = parentProfileSchema;

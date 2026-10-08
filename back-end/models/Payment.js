@@ -1,8 +1,7 @@
 const mongoose = require("mongoose");
-
 const paymentSchema = new mongoose.Schema(
   {
-    parent: {
+parent: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
@@ -50,4 +49,6 @@ const paymentSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model("Payment", paymentSchema);
+
+
+module.exports = paymentSchema;

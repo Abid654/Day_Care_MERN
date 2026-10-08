@@ -1,8 +1,7 @@
 const mongoose = require("mongoose");
-
 const daycareApplicationSchema = new mongoose.Schema(
   {
-    daycare: {
+daycare: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
       required: true,
@@ -32,7 +31,7 @@ const daycareApplicationSchema = new mongoose.Schema(
   }
 );
 
-module.exports = mongoose.model(
-  "DaycareApplication",
-  daycareApplicationSchema
-);
+
+
+
+module.exports = daycareApplicationSchema;
