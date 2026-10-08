@@ -248,44 +248,27 @@
 
 
 import { useState } from "react";
+import { useFormik } from "formik";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye, EyeOff } from "lucide-react";
 import { toast } from "react-toastify";
 import { login } from "../api/authApi";
+import { loginSchema } from "../validation/authSchemas";
 
 const Login = ({ adminOnly = false }) => {
     const navigate = useNavigate();
 
-    const [formData, setFormData] = useState({
-        email: "",
-        password: "",
-    });
-
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
-
-    const handleChange = (e) => {
-        const { name, value } = e.target;
-
-        setFormData((prev) => ({
-            ...prev,
-            [name]: value,
-        }));
-    };
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-
-        // Frontend validation
-        if (!formData.email || !formData.password) {
-            toast.error("Email and password are required");
-            return;
-        }
+    const formik = useFormik({
+        initialValues: { email: "", password: "" },
+        validationSchema: loginSchema,
+        onSubmit: async (values) => {
 
         try {
             setLoading(true);
 
-            const response = await login({ ...formData, portal: adminOnly ? "admin" : "standard" });
+            const response = await login({ ...values, portal: adminOnly ? "admin" : "standard" });
 
             const role = response.data.user.role;
             if ((adminOnly && role !== "admin") || (!adminOnly && role === "admin")) {
@@ -322,7 +305,8 @@ const Login = ({ adminOnly = false }) => {
         } finally {
             setLoading(false);
         }
-    };
+        },
+    });
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-purple-50 flex items-center justify-center p-3">
@@ -408,7 +392,7 @@ const Login = ({ adminOnly = false }) => {
                     </div>
 
                     <form
-                        onSubmit={handleSubmit}
+                        onSubmit={formik.handleSubmit}
                         className="space-y-5"
                     >
 
@@ -422,11 +406,13 @@ const Login = ({ adminOnly = false }) => {
                             <input
                                 type="email"
                                 name="email"
-                                value={formData.email}
-                                onChange={handleChange}
+                                value={formik.values.email}
+                                onChange={formik.handleChange}
+                                onBlur={formik.handleBlur}
                                 placeholder="you@example.com"
                                 className="w-full px-4 py-3.5 rounded-xl border border-gray-200 bg-gray-50 outline-none transition focus:bg-white focus:border-sky-500 focus:ring-4 focus:ring-sky-100"
                             />
+                            {formik.touched.email && formik.errors.email && <p className="mt-1.5 text-xs font-medium text-rose-600">{formik.errors.email}</p>}
 
                         </div>
 
@@ -457,8 +443,9 @@ const Login = ({ adminOnly = false }) => {
                                             : "password"
                                     }
                                     name="password"
-                                    value={formData.password}
-                                    onChange={handleChange}
+                                    value={formik.values.password}
+                                    onChange={formik.handleChange}
+                                    onBlur={formik.handleBlur}
                                     placeholder="Enter your password"
                                     className="w-full px-4 py-3.5 pr-12 rounded-xl border border-gray-200 bg-gray-50 outline-none transition focus:bg-white focus:border-sky-500 focus:ring-4 focus:ring-sky-100"
                                 />
@@ -478,6 +465,7 @@ const Login = ({ adminOnly = false }) => {
                                 </button>
 
                             </div>
+                            {formik.touched.password && formik.errors.password && <p className="mt-1.5 text-xs font-medium text-rose-600">{formik.errors.password}</p>}
 
                         </div>
 

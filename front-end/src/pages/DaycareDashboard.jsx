@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import { FormikProvider, useFormik, useFormikContext } from "formik";
 import { useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import { getAssetUrl } from "../api/client";
 import { getDaycareProfile, saveDaycareProfile, uploadDaycarePhoto } from "../api/daycareApi";
+import { daycareStepFields, daycareStepSchemas } from "../validation/daycareSchemas";
 import {
     Bell,
     CalendarDays,
@@ -26,7 +28,6 @@ const DaycareDashboard = () => {
     const [profileStep, setProfileStep] = useState(0);
     const [profileSaving, setProfileSaving] = useState(false);
     const [selectedPhotos, setSelectedPhotos] = useState([]);
-    const [profile, setProfile] = useState({ daycareName: "", description: "", address: "", area: "", phone: "", fee: "", services: [], qualifications: "", training: "", facilities: "", paymentOptions: "", images: [] });
     const [listingStatus, setListingStatus] = useState("pending");
     const { user, token } = useMemo(() => {
         try {
@@ -35,6 +36,14 @@ const DaycareDashboard = () => {
             return { user: null, token: null };
         }
     }, []);
+    const formik = useFormik({
+        initialValues: { daycareName: "", description: "", address: "", area: "", phone: "", fee: "", services: [], qualifications: "", training: "", facilities: "", paymentOptions: "", images: [], experienceYears: "", medicalStaffCount: "", nursingStaffCount: "", cctv: false, nursingFacilities: false },
+        validationSchema: daycareStepSchemas[profileStep],
+        validateOnChange: false,
+        onSubmit: submitProfile,
+    });
+    const profile = formik.values;
+    const { setValues } = formik;
 
     useEffect(() => {
         if (!token || user?.role !== "daycare") navigate("/", { replace: true });
@@ -44,12 +53,12 @@ const DaycareDashboard = () => {
         if (!token || user?.role !== "daycare") return;
         getDaycareProfile(token)
             .then(({ data }) => {
-                if (data.profile) setProfile((current) => ({ ...current, ...data.profile, fee: data.profile.fee ?? "", services: data.profile.services || [], qualifications: (data.profile.qualifications || []).join(", "), training: (data.profile.training || []).join(", "), facilities: (data.profile.facilities || []).join(", "), paymentOptions: (data.profile.paymentOptions || []).join(", "), images: data.profile.images || [] }));
-                else setProfile((current) => ({ ...current, daycareName: user.name || "", phone: user.phone || "" }));
+                if (data.profile) setValues((current) => ({ ...current, ...data.profile, fee: data.profile.fee ?? "", services: data.profile.services || [], qualifications: (data.profile.qualifications || []).join(", "), training: (data.profile.training || []).join(", "), facilities: (data.profile.facilities || []).join(", "), paymentOptions: (data.profile.paymentOptions || []).join(", "), images: data.profile.images || [] }));
+                else setValues((current) => ({ ...current, daycareName: user.name || "", phone: user.phone || "" }));
                 setListingStatus(data.listingStatus || "pending");
             })
             .catch(() => toast.error("Could not load your daycare profile."));
-    }, [token, user]);
+    }, [setValues, token, user]);
 
     if (!token || user?.role !== "daycare") return null;
 
@@ -60,9 +69,9 @@ const DaycareDashboard = () => {
         weekday: "long", month: "long", day: "numeric",
     }).format(new Date());
     const showComingSoon = () => toast.info("Daycare management tools are coming soon.");
-    const openProfile = () => { setProfileStep(0); setProfileOpen(true); };
-    const updateProfileField = (event) => setProfile((current) => ({ ...current, [event.target.name]: event.target.value }));
-    const updateProfileList = (event) => setProfile((current) => ({ ...current, [event.target.name]: event.target.value }));
+    const openProfile = () => { setProfileStep(0); formik.setTouched({}); formik.setErrors({}); setProfileOpen(true); };
+    const updateProfileField = formik.handleChange;
+    const updateProfileList = formik.handleChange;
     const addPhotos = (event) => {
         const files = Array.from(event.target.files || []);
         const validFiles = files.filter((file) => ["image/jpeg", "image/png", "image/webp"].includes(file.type) && file.size <= 3 * 1024 * 1024);
@@ -76,21 +85,15 @@ const DaycareDashboard = () => {
         URL.revokeObjectURL(current[index].preview);
         return current.filter((_, photoIndex) => photoIndex !== index);
     });
-    const toggleService = (service) => setProfile((current) => ({ ...current, services: current.services.includes(service) ? current.services.filter((item) => item !== service) : [...current.services, service] }));
-    const nextProfileStep = () => {
-        if (profileStep === 0 && (!profile.daycareName?.trim() || !profile.phone?.trim() || !profile.address?.trim() || !profile.area?.trim())) {
-            toast.error("Complete the daycare name, contact, address, and area before continuing.");
-            return;
-        }
+    const toggleService = (service) => formik.setFieldValue("services", profile.services.includes(service) ? profile.services.filter((item) => item !== service) : [...profile.services, service]);
+    const nextProfileStep = async () => {
+        const errors = await formik.validateForm();
+        const currentStepFields = daycareStepFields[profileStep];
+        formik.setTouched({ ...formik.touched, ...Object.fromEntries(currentStepFields.map((field) => [field, true])) }, false);
+        if (currentStepFields.some((field) => errors[field])) return;
         setProfileStep((step) => Math.min(step + 1, 3));
     };
-    const submitProfile = async (event) => {
-        event.preventDefault();
-        if (profile.fee === "" || !Number.isFinite(Number(profile.fee)) || Number(profile.fee) < 0) {
-            toast.error("Enter a valid monthly fee before submitting your profile.");
-            setProfileStep(3);
-            return;
-        }
+    async function submitProfile(values, { setValues }) {
         try {
             setProfileSaving(true);
             const toList = (value) => value.split(",").map((item) => item.trim()).filter(Boolean);
@@ -98,11 +101,11 @@ const DaycareDashboard = () => {
                 const { data } = await uploadDaycarePhoto(file, token);
                 return data.url;
             }));
-            const profileData = { ...profile, qualifications: toList(profile.qualifications), training: toList(profile.training), facilities: toList(profile.facilities), paymentOptions: toList(profile.paymentOptions), images: [...profile.images, ...newPhotos] };
+            const profileData = { ...values, experienceYears: Number(values.experienceYears || 0), medicalStaffCount: Number(values.medicalStaffCount || 0), nursingStaffCount: Number(values.nursingStaffCount || 0), fee: Number(values.fee), qualifications: toList(values.qualifications), training: toList(values.training), facilities: toList(values.facilities), paymentOptions: toList(values.paymentOptions), images: [...values.images, ...newPhotos] };
             const { data } = await saveDaycareProfile(profileData, token);
             selectedPhotos.forEach(({ preview }) => URL.revokeObjectURL(preview));
             setSelectedPhotos([]);
-            setProfile((current) => ({ ...current, ...data.profile, fee: data.profile.fee, qualifications: (data.profile.qualifications || []).join(", "), training: (data.profile.training || []).join(", "), facilities: (data.profile.facilities || []).join(", "), paymentOptions: (data.profile.paymentOptions || []).join(", "), images: data.profile.images || [] }));
+            setValues((current) => ({ ...current, ...data.profile, fee: data.profile.fee, qualifications: (data.profile.qualifications || []).join(", "), training: (data.profile.training || []).join(", "), facilities: (data.profile.facilities || []).join(", "), paymentOptions: (data.profile.paymentOptions || []).join(", "), images: data.profile.images || [] }));
             setListingStatus("pending");
             setProfileOpen(false);
             toast.success(data.message);
@@ -112,7 +115,7 @@ const DaycareDashboard = () => {
         } finally {
             setProfileSaving(false);
         }
-    };
+    }
     const handleLogout = () => {
         localStorage.removeItem("token");
         localStorage.removeItem("user");
@@ -170,16 +173,16 @@ const DaycareDashboard = () => {
                 <section className="mt-6 flex items-start gap-4 rounded-3xl border border-sky-100 bg-sky-50/70 p-5"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-sky-600"><ShieldCheck size={20} /></div><div><h2 className="font-bold text-slate-900">Provider account</h2><p className="mt-1 text-sm leading-6 text-slate-600">Signed in as {user.email}. Finish your centre profile to prepare it for review and help parents understand the care you offer.</p></div><CheckCircle2 size={19} className="ml-auto shrink-0 text-emerald-600" /></section>
             </main>
             {profileOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-2 sm:p-4">
-                <form onSubmit={submitProfile} className="flex max-h-[calc(100vh-1rem)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[calc(100vh-2rem)]">
+                <FormikProvider value={formik}><form onSubmit={formik.handleSubmit} noValidate className="flex max-h-[calc(100vh-1rem)] w-full max-w-3xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl sm:max-h-[calc(100vh-2rem)]">
                     <header className="shrink-0 border-b border-slate-100 px-5 py-4 sm:px-7"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wider text-sky-600">Provider listing · Step {profileStep + 1} of 4</p><h2 className="mt-1 text-xl font-bold text-slate-900 sm:text-2xl">{["Centre details", "Experience & training", "Care & facilities", "Fees & photos"][profileStep]}</h2><p className="mt-1 text-sm text-slate-500">Complete your details for admin review.</p></div><button type="button" onClick={() => setProfileOpen(false)} className="rounded-lg px-3 py-1 text-2xl text-slate-400 hover:bg-slate-100" aria-label="Close">×</button></div><div className="mt-4 flex gap-2">{[0, 1, 2, 3].map((step) => <div key={step} className={`h-1.5 flex-1 rounded-full ${step <= profileStep ? "bg-sky-500" : "bg-slate-100"}`} />)}</div></header>
                     <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-7">
-                        {profileStep === 0 && <div className="grid gap-4 sm:grid-cols-2"><ProfileInput label="Daycare name" name="daycareName" value={profile.daycareName} onChange={updateProfileField} /><ProfileInput label="Contact phone" name="phone" value={profile.phone} onChange={updateProfileField} /><ProfileInput label="Address" name="address" value={profile.address} onChange={updateProfileField} /><ProfileInput label="Area / city" name="area" value={profile.area} onChange={updateProfileField} /><label className="sm:col-span-2"><span className="mb-1 block text-sm font-semibold text-slate-700">Description</span><textarea name="description" value={profile.description || ""} onChange={updateProfileField} rows="4" className="w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-sky-400" /></label></div>}
+                        {profileStep === 0 && <div className="grid gap-4 sm:grid-cols-2"><ProfileInput label="Daycare name" name="daycareName" value={profile.daycareName} onChange={updateProfileField} /><ProfileInput label="Contact phone" name="phone" value={profile.phone} onChange={updateProfileField} /><ProfileInput label="Address" name="address" value={profile.address} onChange={updateProfileField} /><ProfileInput label="Area / city" name="area" value={profile.area} onChange={updateProfileField} /><label className="sm:col-span-2"><span className="mb-1 block text-sm font-semibold text-slate-700">Description</span><textarea name="description" value={profile.description || ""} onChange={updateProfileField} onBlur={formik.handleBlur} rows="4" className="w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-sky-400" />{formik.touched.description && formik.errors.description && <FieldError>{formik.errors.description}</FieldError>}</label></div>}
                         {profileStep === 1 && <div className="grid gap-4 sm:grid-cols-2"><ProfileInput label="Experience (years)" name="experienceYears" type="number" min="0" value={profile.experienceYears || ""} onChange={updateProfileField} /><ProfileInput label="Qualifications (comma separated)" name="qualifications" value={profile.qualifications} onChange={updateProfileList} /><ProfileInput label="Training (comma separated)" name="training" value={profile.training} onChange={updateProfileList} /></div>}
-                        {profileStep === 2 && <div className="grid gap-5 sm:grid-cols-2"><div className="sm:col-span-2"><span className="mb-2 block text-sm font-semibold text-slate-700">Services offered</span><div className="flex flex-wrap gap-5">{[["home", "Home based"], ["facility", "Daycare facility"]].map(([value, label]) => <label key={value} className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={profile.services.includes(value)} onChange={() => toggleService(value)} />{label}</label>)}</div></div><ProfileInput label="Facilities (comma separated)" name="facilities" value={profile.facilities} onChange={updateProfileList} /><ProfileInput label="Medical staff count" name="medicalStaffCount" type="number" min="0" value={profile.medicalStaffCount || ""} onChange={updateProfileField} /><ProfileInput label="Nursing staff count" name="nursingStaffCount" type="number" min="0" value={profile.nursingStaffCount || ""} onChange={updateProfileField} /><div className="flex flex-col gap-3 sm:justify-center"><label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={Boolean(profile.cctv)} onChange={(event) => setProfile((current) => ({ ...current, cctv: event.target.checked }))} /> CCTV available</label><label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={Boolean(profile.nursingFacilities)} onChange={(event) => setProfile((current) => ({ ...current, nursingFacilities: event.target.checked }))} /> Nursing facilities</label></div></div>}
+                        {profileStep === 2 && <div className="grid gap-5 sm:grid-cols-2"><div className="sm:col-span-2"><span className="mb-2 block text-sm font-semibold text-slate-700">Services offered</span><div className="flex flex-wrap gap-5">{[["home", "Home based"], ["facility", "Daycare facility"]].map(([value, label]) => <label key={value} className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={profile.services.includes(value)} onChange={() => toggleService(value)} />{label}</label>)}</div>{formik.touched.services && formik.errors.services && <FieldError>{formik.errors.services}</FieldError>}</div><ProfileInput label="Facilities (comma separated)" name="facilities" value={profile.facilities} onChange={updateProfileList} /><ProfileInput label="Medical staff count" name="medicalStaffCount" type="number" min="0" value={profile.medicalStaffCount || ""} onChange={updateProfileField} /><ProfileInput label="Nursing staff count" name="nursingStaffCount" type="number" min="0" value={profile.nursingStaffCount || ""} onChange={updateProfileField} /><div className="flex flex-col gap-3 sm:justify-center"><label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={Boolean(profile.cctv)} onChange={(event) => formik.setFieldValue("cctv", event.target.checked)} /> CCTV available</label><label className="flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={Boolean(profile.nursingFacilities)} onChange={(event) => formik.setFieldValue("nursingFacilities", event.target.checked)} /> Nursing facilities</label></div></div>}
                         {profileStep === 3 && <div className="grid gap-5 sm:grid-cols-2"><ProfileInput label="Monthly fee (Rs.)" name="fee" type="number" min="0" value={profile.fee} onChange={updateProfileField} /><ProfileInput label="Payment options (comma separated)" name="paymentOptions" value={profile.paymentOptions} onChange={updateProfileList} /><div className="sm:col-span-2"><label className="mb-2 block text-sm font-semibold text-slate-700">Upload daycare photos <span className="font-normal text-slate-400">(up to 10, JPG/PNG/WebP, 3 MB each)</span></label><input type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={addPhotos} className="block w-full rounded-xl border border-slate-200 p-3 text-sm text-slate-600 file:mr-4 file:rounded-lg file:border-0 file:bg-sky-50 file:px-4 file:py-2 file:font-semibold file:text-sky-700 hover:file:bg-sky-100" /><div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">{profile.images.map((image, index) => <div key={image} className="relative overflow-hidden rounded-xl border border-slate-200"><img src={getAssetUrl(image)} alt={`Daycare photo ${index + 1}`} className="h-28 w-full object-cover" /><span className="absolute bottom-1 left-1 rounded bg-black/60 px-2 py-0.5 text-xs text-white">Uploaded</span></div>)}{selectedPhotos.map(({ preview, file }, index) => <div key={`${file.name}-${index}`} className="relative overflow-hidden rounded-xl border border-sky-200"><img src={preview} alt={file.name} className="h-28 w-full object-cover" /><button type="button" onClick={() => removeSelectedPhoto(index)} className="absolute right-1 top-1 rounded-full bg-black/60 px-2 py-0.5 text-sm text-white" aria-label="Remove photo">×</button></div>)}</div><p className="mt-2 text-xs text-slate-500">{profile.images.length + selectedPhotos.length} of 10 photos selected. They will be included in your parent listing after approval.</p></div></div>}
                     </div>
                     <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-slate-100 bg-white px-5 py-4 sm:px-7"><button type="button" onClick={() => profileStep === 0 ? setProfileOpen(false) : setProfileStep((step) => step - 1)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600">{profileStep === 0 ? "Cancel" : "Back"}</button>{profileStep < 3 ? <button type="button" onClick={nextProfileStep} className="rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 px-5 py-2.5 text-sm font-bold text-white">Continue</button> : <button type="submit" disabled={profileSaving} className="rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 px-5 py-2.5 text-sm font-bold text-white disabled:opacity-60">{profileSaving ? "Submitting…" : "Submit for review"}</button>}</footer>
-                </form>
+                </form></FormikProvider>
             </div>}
         </div>
     );
@@ -188,7 +191,11 @@ const DaycareDashboard = () => {
 const colorStyles = { sky: "bg-sky-50 text-sky-600", indigo: "bg-indigo-50 text-indigo-600", emerald: "bg-emerald-50 text-emerald-600", amber: "bg-amber-50 text-amber-600" };
 const SummaryCard = ({ icon, label, value, detail, color }) => <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm sm:p-6"><div className="mb-5 flex items-center justify-between"><span className="text-sm font-medium text-slate-500">{label}</span><span className={`flex h-10 w-10 items-center justify-center rounded-xl ${colorStyles[color]}`}>{icon}</span></div><p className="text-2xl font-extrabold text-slate-900">{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>;
 const ProfileStep = ({ icon, title, detail, onClick }) => <button onClick={onClick} className="group flex w-full items-center gap-3 rounded-2xl border border-slate-100 p-3 text-left transition hover:border-sky-200 hover:bg-sky-50/50"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-600">{icon}</div><div className="min-w-0 flex-1"><p className="text-sm font-semibold text-slate-800">{title}</p><p className="mt-0.5 text-xs leading-5 text-slate-500">{detail}</p></div><Plus size={17} className="shrink-0 text-slate-300 transition group-hover:text-sky-600" /></button>;
-const ProfileInput = ({ label, name, value, onChange, type = "text", ...props }) => <label><span className="mb-1 block text-sm font-semibold text-slate-700">{label}</span><input name={name} type={type} value={value ?? ""} onChange={onChange} {...props} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-sky-400" /></label>;
+const ProfileInput = ({ label, name, value, onChange, type = "text", ...props }) => {
+    const { handleBlur, touched, errors } = useFormikContext();
+    return <label><span className="mb-1 block text-sm font-semibold text-slate-700">{label}</span><input name={name} type={type} value={value ?? ""} onChange={onChange} onBlur={handleBlur} {...props} className="w-full rounded-xl border border-slate-200 px-3 py-2.5 outline-none focus:border-sky-400" />{touched[name] && errors[name] && <FieldError>{errors[name]}</FieldError>}</label>;
+};
+const FieldError = ({ children }) => <span className="mt-1.5 block text-xs font-medium text-rose-600">{children}</span>;
 const FinanceTile = ({ label, value, accent }) => <div className={`rounded-2xl p-4 ${accent === "emerald" ? "bg-emerald-50" : "bg-rose-50"}`}><p className={`text-xs font-semibold ${accent === "emerald" ? "text-emerald-700" : "text-rose-700"}`}>{label}</p><p className={`mt-2 text-2xl font-extrabold ${accent === "emerald" ? "text-emerald-800" : "text-rose-800"}`}>{value}</p><p className="mt-1 text-xs text-slate-500">No report data yet</p></div>;
 
 export default DaycareDashboard;

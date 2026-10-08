@@ -21,6 +21,7 @@ app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
 app.use("/daycare", daycareRoutes);
 app.get("/daycares", daycareController.listDaycares);
+app.get("/daycares/:tenantId", daycareController.getPublicDaycare);
 
 app.get("/", (req, res) => {
     res.send("Online Daycare API is running");

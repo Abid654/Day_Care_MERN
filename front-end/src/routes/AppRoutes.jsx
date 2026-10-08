@@ -5,6 +5,7 @@ import Register from "../pages/Register";
 import ParentDashboard from "../pages/ParentDashboard";
 import DaycareDashboard from "../pages/DaycareDashboard";
 import AdminDashboard from "../pages/AdminDashboard";
+import DaycareProfilePage from "../pages/DaycareProfilePage";
 
 const AppRoutes = () => {
   return (
@@ -15,6 +16,7 @@ const AppRoutes = () => {
         <Route path="/admin/dashboard" element={<AdminDashboard />} />
         <Route path="/register" element={<Register />} />
         <Route path="/parent/dashboard" element={<ParentDashboard />} />
+        <Route path="/daycares/:daycareId" element={<DaycareProfilePage />} />
         <Route path="/daycare/dashboard" element={<DaycareDashboard />} />
       </Routes>
     </BrowserRouter>

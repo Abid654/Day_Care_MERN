@@ -52,6 +52,46 @@ async function listDaycares(req, res) {
   }
 }
 
+async function getPublicDaycare(req, res) {
+  try {
+    const { tenantId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(tenantId)) {
+      return res.status(404).json({ success: false, message: "Daycare listing not found" });
+    }
+    const tenant = await getMainModels().Tenant.findOne({
+      _id: tenantId,
+      status: "active",
+      listingStatus: "approved",
+    }).select("name ownerUserId databaseName").lean();
+    if (!tenant) return res.status(404).json({ success: false, message: "Daycare listing not found" });
+
+    const models = getTenantModels(getTenantConnection(tenant.databaseName));
+    const [user, profile] = await Promise.all([
+      models.User.findOne({ _id: tenant.ownerUserId, role: "daycare", isActive: true }).select("name phone").lean(),
+      models.DaycareProfile.findOne({
+        user: tenant.ownerUserId,
+        approvalStatus: "approved",
+        isVerified: true,
+      }).select("daycareName description address area phone qualifications training experienceYears services facilities cctv nursingFacilities nursingStaffCount medicalStaffCount images fee paymentOptions isVerified").lean(),
+    ]);
+    if (!user || !profile) return res.status(404).json({ success: false, message: "Daycare listing not found" });
+
+    return res.json({
+      success: true,
+      daycare: {
+        id: tenant._id,
+        name: profile.daycareName || tenant.name || user.name,
+        contactName: user.name,
+        phone: profile.phone || user.phone,
+        profile,
+      },
+    });
+  } catch (error) {
+    console.error("Public daycare profile error:", error.message);
+    return res.status(503).json({ success: false, message: "Daycare profile is temporarily unavailable" });
+  }
+}
+
 async function getMyProfile(req, res) {
   try {
     const profile = await req.models.DaycareProfile.findOne({ user: req.user.userId }).lean();
@@ -202,4 +242,4 @@ async function reviewDaycare(req, res) {
   }
 }
 
-module.exports = { listDaycares, getMyProfile, saveMyProfile, uploadProfilePhoto, listAdminDaycares, reviewDaycare };
+module.exports = { listDaycares, getPublicDaycare, getMyProfile, saveMyProfile, uploadProfilePhoto, listAdminDaycares, reviewDaycare };

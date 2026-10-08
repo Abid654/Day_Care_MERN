@@ -9,3 +9,4 @@ export const uploadDaycarePhoto = (file, token) => apiClient.post("/daycare/prof
 
 export const saveDaycareProfile = (profile, token) => apiClient.put("/daycare/profile", profile, authConfig(token));
 export const getDaycareListings = () => apiClient.get("/daycares");
+export const getDaycareListing = (daycareId) => apiClient.get(`/daycares/${daycareId}`);

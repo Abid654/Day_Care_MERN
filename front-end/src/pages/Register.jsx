@@ -1,57 +1,28 @@
 import { useState } from "react";
+import { useFormik } from "formik";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "react-toastify";
 import { Eye, EyeOff } from "lucide-react";
 import { register } from "../api/authApi";
+import { registerSchema } from "../validation/authSchemas";
 
 const Register = () => {
     const navigate = useNavigate();
-
-    const [formData, setFormData] = useState({
-        name: "",
-        email: "",
-        password: "",
-        confirmPassword: "",
-        phone: "",
-        role: "parent",
-    });
 
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [registrationComplete, setRegistrationComplete] = useState(false);
 
-    const initialFormData = {
-        name: "",
-        email: "",
-        password: "",
-        confirmPassword: "",
-        phone: "",
-        role: "parent",
-    };
-
-    const handleChange = (e) => {
-        const { name, value } = e.target;
-
-        setFormData((prev) => ({
-            ...prev,
-            [name]: value,
-        }));
-    };
-
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-
-        // Frontend password check
-        if (formData.password !== formData.confirmPassword) {
-            toast.error("Passwords do not match!");
-            return;
-        }
+    const formik = useFormik({
+        initialValues: { name: "", email: "", password: "", confirmPassword: "", phone: "", role: "parent" },
+        validationSchema: registerSchema,
+        onSubmit: async (values, { resetForm }) => {
 
         try {
             setLoading(true);
 
-            const response = await register(formData);
+            const response = await register(values);
 
             console.log("Register Response:", response.data);
 
@@ -60,7 +31,7 @@ const Register = () => {
                 response.data.message || "Account created successfully!"
             );
 
-            setFormData(initialFormData);
+            resetForm();
             setRegistrationComplete(true);
 
             // Wait 2 seconds, then navigate to Login page
@@ -83,7 +54,8 @@ const Register = () => {
         } finally {
             setLoading(false);
         }
-    };
+        },
+    });
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-purple-50 flex items-center justify-center p-3">
@@ -172,7 +144,7 @@ const Register = () => {
                     </div>
 
                     <form
-                        onSubmit={handleSubmit}
+                        onSubmit={formik.handleSubmit}
                         className="space-y-3.5"
                     >
 
@@ -186,11 +158,13 @@ const Register = () => {
                             <input
                                 type="text"
                                 name="name"
-                                value={formData.name}
-                                onChange={handleChange}
+                                value={formik.values.name}
+                                onChange={formik.handleChange}
+                                onBlur={formik.handleBlur}
                                 placeholder="Enter your full name"
                                 className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 outline-none transition focus:bg-white focus:border-sky-500 focus:ring-4 focus:ring-sky-100"
                             />
+                            {formik.touched.name && formik.errors.name && <p className="mt-1 text-xs font-medium text-rose-600">{formik.errors.name}</p>}
 
                         </div>
 
@@ -206,11 +180,13 @@ const Register = () => {
                                 <input
                                     type="email"
                                     name="email"
-                                    value={formData.email}
-                                    onChange={handleChange}
+                                    value={formik.values.email}
+                                    onChange={formik.handleChange}
+                                    onBlur={formik.handleBlur}
                                     placeholder="you@example.com"
                                     className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 outline-none transition focus:bg-white focus:border-sky-500 focus:ring-4 focus:ring-sky-100"
                                 />
+                                {formik.touched.email && formik.errors.email && <p className="mt-1 text-xs font-medium text-rose-600">{formik.errors.email}</p>}
 
                             </div>
 
@@ -223,11 +199,13 @@ const Register = () => {
                                 <input
                                     type="text"
                                     name="phone"
-                                    value={formData.phone}
-                                    onChange={handleChange}
+                                    value={formik.values.phone}
+                                    onChange={formik.handleChange}
+                                    onBlur={formik.handleBlur}
                                     placeholder="0300 1234567"
                                     className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 outline-none transition focus:bg-white focus:border-sky-500 focus:ring-4 focus:ring-sky-100"
                                 />
+                                {formik.touched.phone && formik.errors.phone && <p className="mt-1 text-xs font-medium text-rose-600">{formik.errors.phone}</p>}
 
                             </div>
 
@@ -252,8 +230,9 @@ const Register = () => {
                                                 : "password"
                                         }
                                         name="password"
-                                        value={formData.password}
-                                        onChange={handleChange}
+                                        value={formik.values.password}
+                                        onChange={formik.handleChange}
+                                        onBlur={formik.handleBlur}
                                         placeholder="Create password"
                                         className="w-full px-4 py-2.5 pr-11 rounded-xl border border-gray-200 bg-gray-50 outline-none transition focus:bg-white focus:border-sky-500 focus:ring-4 focus:ring-sky-100"
                                     />
@@ -273,6 +252,7 @@ const Register = () => {
                                     </button>
 
                                 </div>
+                                {formik.touched.password && formik.errors.password && <p className="mt-1 text-xs font-medium text-rose-600">{formik.errors.password}</p>}
 
                             </div>
 
@@ -292,8 +272,9 @@ const Register = () => {
                                                 : "password"
                                         }
                                         name="confirmPassword"
-                                        value={formData.confirmPassword}
-                                        onChange={handleChange}
+                                        value={formik.values.confirmPassword}
+                                        onChange={formik.handleChange}
+                                        onBlur={formik.handleBlur}
                                         placeholder="Confirm password"
                                         className="w-full px-4 py-2.5 pr-11 rounded-xl border border-gray-200 bg-gray-50 outline-none transition focus:bg-white focus:border-sky-500 focus:ring-4 focus:ring-sky-100"
                                     />
@@ -315,6 +296,7 @@ const Register = () => {
                                     </button>
 
                                 </div>
+                                {formik.touched.confirmPassword && formik.errors.confirmPassword && <p className="mt-1 text-xs font-medium text-rose-600">{formik.errors.confirmPassword}</p>}
 
                             </div>
 
@@ -333,13 +315,10 @@ const Register = () => {
                                 <button
                                     type="button"
                                     onClick={() =>
-                                        setFormData((prev) => ({
-                                            ...prev,
-                                            role: "parent",
-                                        }))
+                                        formik.setFieldValue("role", "parent")
                                     }
                                     className={`p-3 rounded-xl border-2 text-left transition ${
-                                        formData.role === "parent"
+                                        formik.values.role === "parent"
                                             ? "border-sky-500 bg-sky-50"
                                             : "border-gray-200 hover:border-gray-300"
                                     }`}
@@ -363,13 +342,10 @@ const Register = () => {
                                 <button
                                     type="button"
                                     onClick={() =>
-                                        setFormData((prev) => ({
-                                            ...prev,
-                                            role: "daycare",
-                                        }))
+                                        formik.setFieldValue("role", "daycare")
                                     }
                                     className={`p-3 rounded-xl border-2 text-left transition ${
-                                        formData.role === "daycare"
+                                        formik.values.role === "daycare"
                                             ? "border-indigo-500 bg-indigo-50"
                                             : "border-gray-200 hover:border-gray-300"
                                     }`}
