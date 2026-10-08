@@ -6,6 +6,7 @@ const controller = require("../controllers/parentController");
 const router = express.Router();
 router.use(authMiddleware, requireRole("parent"));
 router.get("/portal", controller.getParentPortal);
+router.get("/portal/:tenantId/children/:childId/photo", controller.getParentChildPhoto);
 router.post("/portal/:tenantId/complaints", controller.createComplaint);
 router.post("/portal/:tenantId/requests", controller.createRequest);
 

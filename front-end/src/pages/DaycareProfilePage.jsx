@@ -5,6 +5,7 @@ import { ArrowLeft, MapPin, Phone, ShieldCheck, Wallet, Building2, Users, Video,
 import { getAdminDaycare, reviewDaycare } from "../api/adminApi";
 import { getDaycareListing } from "../api/daycareApi";
 import DaycarePhotoGallery from "../components/DaycarePhotoGallery";
+import ActionModal from "../components/ActionModal";
 
 const DaycareProfilePage = ({ adminView = false }) => {
     const navigate = useNavigate();
@@ -12,6 +13,7 @@ const DaycareProfilePage = ({ adminView = false }) => {
     const [daycare, setDaycare] = useState(null);
     const [loading, setLoading] = useState(true);
     const [reviewSaving, setReviewSaving] = useState(false);
+    const [reviewModal, setReviewModal] = useState(null);
     const { user, token } = useMemo(() => {
         try {
             return { user: JSON.parse(localStorage.getItem("user") || "null"), token: localStorage.getItem("token") };
@@ -44,18 +46,23 @@ const DaycareProfilePage = ({ adminView = false }) => {
     const profile = daycare?.profile || {};
     const images = profile.images || [];
     const list = (items) => Array.isArray(items) && items.length ? items : [];
-    const handleReview = async (decision) => {
-        try {
-            setReviewSaving(true);
-            const { data } = await reviewDaycare(daycare.id, decision, token);
-            setDaycare((current) => ({ ...current, listingStatus: data.listingStatus, profile: current.profile ? { ...current.profile, approvalStatus: data.listingStatus, isVerified: data.listingStatus === "approved" } : null }));
-            toast.success(data.message);
-        } catch (error) {
-            toast.error(error.response?.data?.message || "Could not update daycare review.");
-        } finally {
-            setReviewSaving(false);
-        }
-    };
+    const handleReview = (decision) => setReviewModal({
+        title: decision === "approved" ? `Approve ${daycare.name}?` : "Reject daycare application?",
+        description: decision === "approved" ? "Approving this daycare will make its profile visible to parents." : "The rejection reason will be shared with the daycare administrator.",
+        inputLabel: decision === "approved" ? undefined : "Rejection reason",
+        required: decision !== "approved",
+        confirmLabel: decision === "approved" ? "Approve daycare" : "Reject application",
+        tone: decision === "approved" ? "primary" : "danger",
+        onConfirm: async (reason) => {
+            try {
+                setReviewSaving(true);
+                const { data } = await reviewDaycare(daycare.id, { decision, reason }, token);
+                setDaycare((current) => ({ ...current, listingStatus: data.listingStatus, adminRemarks: data.adminRemarks, rejectionReason: data.rejectionReason, profile: current.profile ? { ...current.profile, approvalStatus: data.listingStatus, isVerified: data.listingStatus === "approved" } : null }));
+                toast.success(data.message); setReviewModal(null);
+            } catch (error) { toast.error(error.response?.data?.message || "Could not update daycare review."); throw error; }
+            finally { setReviewSaving(false); }
+        },
+    });
 
     return (
         <div className="min-h-screen bg-slate-50 text-slate-800">
@@ -103,6 +110,7 @@ const DaycareProfilePage = ({ adminView = false }) => {
                     <section id="profile-qualifications" className="mt-5 scroll-mt-36 rounded-3xl bg-white p-5 shadow-sm ring-1 ring-slate-100 sm:p-7"><div className="mb-4 flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-600"><GraduationCap size={20} /></span><div><p className="text-xs font-bold uppercase tracking-wider text-sky-600">Team expertise</p><h2 className="font-extrabold text-slate-900">Qualifications and training</h2></div></div><div className="grid gap-4 sm:grid-cols-2"><TextList title="Qualifications" items={profile.qualifications} /><TextList title="Training" items={profile.training} /></div></section>
                 </>}
             </main>
+            <ActionModal open={Boolean(reviewModal)} {...reviewModal} onClose={() => setReviewModal(null)} />
         </div>
     );
 };

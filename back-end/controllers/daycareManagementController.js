@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const fs = require("fs/promises");
 const path = require("path");
-const { randomUUID } = require("crypto");
+const { randomBytes, randomUUID } = require("crypto");
 const { publishCenterNotification } = require("../services/realtime");
 
 const MODULES = {
@@ -13,13 +13,13 @@ const MODULES = {
   attendance: { model: "Attendance", search: ["notes"], populate: [{ path: "child", select: "name" }], fields: ["child", "date", "status", "checkIn", "checkOut", "notes"] },
   staffAttendance: { model: "StaffAttendance", search: ["notes"], populate: [{ path: "staff", select: "fullName" }], fields: ["staff", "date", "status", "checkIn", "checkOut", "notes"] },
   dailyActivities: { model: "DailyActivity", search: ["notes", "activities", "healthObservations"], populate: [{ path: "child", select: "name" }], fields: ["child", "date", "meals", "snacks", "nap", "toileting", "activities", "mood", "behavior", "healthObservations", "medication", "notes", "sharedWithParent"] },
-  fees: { model: "FeeInvoice", search: ["invoiceNumber", "description", "transactionReference"], populate: [{ path: "child", select: "name" }, { path: "parent", select: "name" }], fields: ["invoiceNumber", "child", "parent", "description", "amount", "paidAmount", "dueDate", "paidAt", "paymentMethod", "transactionReference", "status", "notes"] },
+  fees: { model: "FeeInvoice", search: ["invoiceNumber", "description", "transactionReference"], populate: [{ path: "child", select: "name" }, { path: "parent", select: "name" }, { path: "payments.receivedBy", select: "name" }], fields: ["invoiceNumber", "child", "parent", "description", "amount", "dueDate", "status", "notes"] },
   leave: { model: "LeaveRequest", search: ["leaveType", "reason", "adminRemarks"], populate: [{ path: "staff", select: "fullName" }], fields: ["staff", "leaveType", "startDate", "endDate", "reason", "status", "adminRemarks"] },
   complaints: { model: "Complaint", search: ["complaintNumber", "subject", "description", "internalNotes"], populate: [{ path: "parent", select: "name" }, { path: "child", select: "name" }, { path: "assignedStaff", select: "fullName" }], fields: ["complaintNumber", "parent", "child", "subject", "description", "priority", "assignedStaff", "status", "response", "internalNotes", "history"] },
   requests: { model: "ParentRequest", search: ["subject", "description", "adminRemarks"], populate: [{ path: "parent", select: "name" }, { path: "child", select: "name" }], fields: ["parent", "child", "requestType", "subject", "description", "status", "adminRemarks"] },
   pickupPersons: { model: "PickupAuthorization", search: ["name", "relationship", "phone", "identificationNumber"], populate: [{ path: "child", select: "name" }], fields: ["child", "name", "relationship", "phone", "identificationNumber", "photo", "authorized", "notes"] },
   pickupLogs: { model: "PickupLog", search: ["pickupName", "notes"], populate: [{ path: "child", select: "name" }, { path: "pickupPerson", select: "name relationship" }, { path: "verifiedBy", select: "name" }], fields: ["child", "pickupPerson", "pickupName", "eventType", "occurredAt", "verified", "notes"] },
-  notifications: { model: "CenterNotification", search: ["title", "message"], fields: ["title", "message", "type", "audience", "parent", "classGroup", "status"] },
+  notifications: { model: "CenterNotification", search: ["title", "message"], populate: [{ path: "parent", select: "name" }, { path: "child", select: "name" }, { path: "staffMember", select: "fullName" }, { path: "classGroup", select: "name" }], fields: ["title", "message", "type", "audience", "parent", "child", "staffMember", "classGroup", "status"] },
   announcements: { model: "Announcement", search: ["title", "description"], populate: [{ path: "classGroup", select: "name" }], fields: ["title", "description", "attachment", "startDate", "endDate", "audience", "classGroup", "status"] },
   events: { model: "DaycareEvent", search: ["name", "description", "location"], populate: [{ path: "classGroup", select: "name" }], fields: ["name", "description", "date", "startTime", "endTime", "location", "audience", "classGroup", "reminderAt", "status"] },
   documents: { model: "DaycareDocument", search: ["title", "category"], populate: [{ path: "child", select: "name" }, { path: "parent", select: "name" }, { path: "staff", select: "fullName" }], fields: ["title", "category", "child", "parent", "staff"] },
@@ -48,6 +48,14 @@ async function syncParentTenantLink(req, parentRecord) {
   await req.models.DaycareParent.updateOne({ _id: parentRecord._id }, { $set: { parentUser: identity.parentUser } });
 }
 
+async function validateNotificationTarget(req, notification) {
+  if (notification.audience === "parent" && (!notification.parent || !(await req.models.DaycareParent.exists({ _id: notification.parent, status: "active" })))) return "Choose an active parent for this notification";
+  if (notification.audience === "class" && (!notification.classGroup || !(await req.models.ClassGroup.exists({ _id: notification.classGroup, status: "active" })))) return "Choose an active class for this notification";
+  if (notification.audience === "child" && (!notification.child || !(await req.models.Child.exists({ _id: notification.child, status: { $ne: "inactive" }, parentContact: { $ne: null } })))) return "Choose an active child linked to a parent";
+  if (notification.audience === "staff-member" && (!notification.staffMember || !(await req.models.Staff.exists({ _id: notification.staffMember, status: "active", userAccount: { $ne: null } })))) return "Choose an active staff member account";
+  return null;
+}
+
 async function listUsers(req, res) {
   const memberships = await req.mainModels.TenantMembership.find({ tenant: req.tenant._id }).select("user email role permissions isActive lastLoginAt createdAt").sort({ createdAt: -1 }).lean();
   const accounts = await req.models.User.find({ _id: { $in: memberships.map((item) => item.user) } }).select("name phone").lean();
@@ -56,27 +64,31 @@ async function listUsers(req, res) {
 }
 
 async function createUser(req, res) {
-  const { name, email, phone, password, role } = req.body || {};
+  const { email, password, role, staffId } = req.body || {};
   const cleanEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
-  if (!name?.trim() || !cleanEmail || !/^\S+@\S+\.\S+$/.test(cleanEmail) || !phone?.trim() || typeof password !== "string" || password.length < 8 || !["manager", "caregiver"].includes(role)) {
-    return res.status(400).json({ success: false, message: "Enter a valid name, email, phone, role, and password of at least 8 characters" });
+  if (!validId(staffId) || !cleanEmail || !/^\S+@\S+\.\S+$/.test(cleanEmail) || typeof password !== "string" || password.length < 8 || !["manager", "caregiver"].includes(role)) {
+    return res.status(400).json({ success: false, message: "Select an active staff member and enter a valid email and password of at least 8 characters" });
   }
   try {
+    const staff = await req.models.Staff.findOne({ _id: staffId, role, status: "active", userAccount: { $in: [null] } });
+    if (!staff) return res.status(409).json({ success: false, message: "This staff member is unavailable or already has a login" });
     if (await req.mainModels.User.exists({ email: cleanEmail }) || await req.mainModels.TenantMembership.exists({ email: cleanEmail }) || await req.mainModels.Tenant.exists({ ownerEmail: cleanEmail })) return res.status(409).json({ success: false, message: "This email is already in use" });
     const userId = new mongoose.Types.ObjectId();
-    const user = await req.models.User.create({ _id: userId, name: name.trim(), email: cleanEmail, phone: phone.trim(), password: await bcrypt.hash(password, 10), role });
+    const user = await req.models.User.create({ _id: userId, name: staff.fullName, email: cleanEmail, phone: staff.phone, password: await bcrypt.hash(password, 10), role });
     const permissions = sanitizePermissions(req.body.permissions);
     let membership;
     try {
       membership = await req.mainModels.TenantMembership.create({ tenant: req.tenant._id, user: user._id, email: cleanEmail, role, permissions });
-      await req.models.Staff.create({ fullName: user.name, email: cleanEmail, phone: phone.trim(), role, status: "active", userAccount: user._id, createdBy: req.user.userId });
+      const linkedStaff = await req.models.Staff.updateOne({ _id: staff._id, status: "active", userAccount: { $in: [null] } }, { $set: { userAccount: user._id, email: cleanEmail } });
+      if (!linkedStaff.modifiedCount) throw Object.assign(new Error("This staff member already has a login"), { statusCode: 409 });
     } catch (error) {
       await Promise.all([req.models.User.deleteOne({ _id: user._id }), membership ? req.mainModels.TenantMembership.deleteOne({ _id: membership._id }) : Promise.resolve()]);
       throw error;
     }
     await writeAudit(req, "created", "users", user._id, { role, email: cleanEmail });
-    return res.status(201).json({ success: true, user: { id: user._id, name: user.name, email: user.email, role, permissions, isActive: true } });
+    return res.status(201).json({ success: true, user: { id: user._id, staffId: staff._id, name: user.name, email: user.email, role, permissions, isActive: true } });
   } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
     if (error.code === 11000) return res.status(409).json({ success: false, message: "This email is already in use" });
     console.error("Daycare user create failed:", error.message);
     return res.status(503).json({ success: false, message: "User account could not be created" });
@@ -87,6 +99,7 @@ async function updateUser(req, res) {
   if (!mongoose.Types.ObjectId.isValid(req.params.userId)) return res.status(400).json({ success: false, message: "Invalid user id" });
   const membership = await req.mainModels.TenantMembership.findOne({ tenant: req.tenant._id, user: req.params.userId });
   if (!membership) return res.status(404).json({ success: false, message: "User not found" });
+  const wasActive = membership.isActive;
   const updates = {};
   if (typeof req.body?.isActive === "boolean") updates.isActive = req.body.isActive;
   if (req.body?.permissions && typeof req.body.permissions === "object") updates.permissions = sanitizePermissions(req.body.permissions);
@@ -95,9 +108,29 @@ async function updateUser(req, res) {
   } else if (req.body?.password !== undefined) return res.status(400).json({ success: false, message: "Password must be at least 8 characters" });
   Object.assign(membership, updates);
   await membership.save();
-  await req.models.User.updateOne({ _id: membership.user }, { $set: { isActive: membership.isActive }, $inc: { tokenVersion: 1 } });
+  const userUpdate = { $set: { isActive: membership.isActive } };
+  if (wasActive !== membership.isActive) userUpdate.$inc = { tokenVersion: 1 };
+  await req.models.User.updateOne({ _id: membership.user }, userUpdate);
   await writeAudit(req, "updated", "users", membership.user, { changedFields: Object.keys(updates) });
   return res.json({ success: true, user: membership.toObject() });
+}
+
+async function resetParentPassword(req, res) {
+  if (!validId(req.params.parentId)) return res.status(400).json({ success: false, message: "Invalid parent id" });
+  try {
+    const parent = await req.models.DaycareParent.findOne({ _id: req.params.parentId, status: "active" }).select("parentUser email").lean();
+    if (!parent) return res.status(404).json({ success: false, message: "Active parent not found" });
+    const link = await req.mainModels.ParentTenantLink.findOne({ tenant: req.tenant._id, daycareParent: parent._id, email: parent.email, isActive: true }).select("parentUser").lean();
+    if (!link?.parentUser || (parent.parentUser && String(link.parentUser) !== String(parent.parentUser))) return res.status(409).json({ success: false, message: "This parent does not have an active sign-in account" });
+    const temporaryPassword = randomBytes(24).toString("base64url");
+    const updated = await req.mainModels.User.updateOne({ _id: link.parentUser, role: "parent", isActive: true }, { $set: { password: await bcrypt.hash(temporaryPassword, 12) }, $inc: { tokenVersion: 1 } });
+    if (!updated.matchedCount) return res.status(404).json({ success: false, message: "Parent sign-in account not found" });
+    await writeAudit(req, "parent-password-reset", "parents", parent._id, { email: parent.email });
+    return res.json({ success: true, temporaryPassword, message: "Password reset. Share the temporary password with the parent using a private channel." });
+  } catch (error) {
+    console.error("Daycare parent password reset failed:", error.message);
+    return res.status(503).json({ success: false, message: "Parent password could not be reset" });
+  }
 }
 
 async function logLogout(req, res) {
@@ -272,6 +305,13 @@ async function createRecord(req, res) {
       const enrolled = await req.models.Child.countDocuments({ classGroup: fields.classGroup, status: { $ne: "inactive" } });
       if (enrolled >= classGroup.capacity) return res.status(400).json({ success: false, message: "This class has reached its capacity" });
     }
+    if (config.model === "CenterNotification") {
+      if ((fields.status || "sent") === "sent") {
+        const targetError = await validateNotificationTarget(req, fields);
+        if (targetError) return res.status(400).json({ success: false, message: targetError });
+        fields.sentAt = new Date();
+      }
+    }
     const record = await config.Model.create(fields);
     if (config.model === "CenterNotification") await publishCenterNotification(req, record);
     if (config.model === "DaycareParent") {
@@ -308,7 +348,7 @@ async function updateRecord(req, res) {
   try {
     const changes = pickFields(req.body || {}, config.fields);
     const previousNotification = config.model === "CenterNotification"
-      ? await config.Model.findById(req.params.recordId).select("status").lean()
+      ? await config.Model.findById(req.params.recordId).select("status audience parent child staffMember classGroup").lean()
       : null;
     if (["Attendance", "StaffAttendance"].includes(config.model)) {
       const relationField = config.model === "Attendance" ? "child" : "staff";
@@ -335,6 +375,13 @@ async function updateRecord(req, res) {
       if (await config.Model.exists({ email: identity.email, _id: { $ne: req.params.recordId } })) return res.status(409).json({ success: false, message: "A parent with this email already exists" });
       changes.email = identity.email;
       changes.parentUser = identity.parentUser;
+    }
+    if (config.model === "CenterNotification") {
+      if (!previousNotification) return res.status(404).json({ success: false, message: "Notification not found" });
+      if ((changes.status || previousNotification.status) === "sent") {
+        const targetError = await validateNotificationTarget(req, { ...previousNotification, ...changes });
+        if (targetError) return res.status(400).json({ success: false, message: targetError });
+      }
     }
     if (config.model === "ClassGroup" && (Object.prototype.hasOwnProperty.call(changes, "capacity") || Object.prototype.hasOwnProperty.call(changes, "children"))) {
       const current = await config.Model.findById(req.params.recordId).select("capacity").lean();
@@ -524,6 +571,89 @@ async function downloadDocument(req, res) {
   }
 }
 
+const PROFILE_IMAGE_TYPES = {
+  "image/jpeg": { extension: ".jpg", valid: (data) => data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff },
+  "image/png": { extension: ".png", valid: (data) => data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) },
+  "image/webp": { extension: ".webp", valid: (data) => data.toString("ascii", 0, 4) === "RIFF" && data.toString("ascii", 8, 12) === "WEBP" },
+};
+const PROFILE_PHOTO_FIELDS = { children: "profilePhoto", parents: "profilePhoto", staff: "profilePhoto", pickupPersons: "photo" };
+
+async function uploadProfilePhoto(req, res) {
+  const field = PROFILE_PHOTO_FIELDS[req.params.module];
+  const config = field && MODULES[req.params.module];
+  if (!config || !config.fields.includes(field)) return res.status(404).json({ success: false, message: "Profile photo target is not supported" });
+  if (!validId(req.params.recordId)) return res.status(400).json({ success: false, message: "Invalid record id" });
+  const contentType = req.headers["content-type"]?.split(";")[0].trim().toLowerCase();
+  const type = PROFILE_IMAGE_TYPES[contentType];
+  if (!Buffer.isBuffer(req.body) || !req.body.length || req.body.length > 3 * 1024 * 1024 || !type || !type.valid(req.body)) return res.status(400).json({ success: false, message: "Upload a valid JPG, PNG, or WebP image up to 3 MB" });
+  try {
+    const scope = await caregiverScope(req, req.params.module);
+    const record = await req.models[config.model].findOne({ _id: req.params.recordId, ...(scope || {}) }).select(field);
+    if (!record) return res.status(404).json({ success: false, message: "Profile record not found" });
+    const storageKey = `${randomUUID()}${type.extension}`;
+    const directory = path.join(__dirname, "..", "private_uploads", "daycare", req.tenant._id.toString(), "profile_photos");
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, storageKey), req.body, { flag: "wx", mode: 0o600 });
+    const previousKey = typeof record[field] === "string" && record[field].startsWith("private:") ? record[field].slice("private:".length) : "";
+    record[field] = `private:${storageKey}`;
+    await record.save();
+    if (/^[a-f0-9-]{36}\.(jpg|png|webp)$/.test(previousKey)) await fs.unlink(path.join(directory, previousKey)).catch(() => {});
+    await writeAudit(req, "updated", req.params.module, record._id, { changedFields: ["profilePhoto"] });
+    return res.json({ success: true, photoUrl: `/daycare/management/${req.params.module}/${record._id}/photo` });
+  } catch (error) {
+    console.error("Daycare profile photo upload failed:", error.message);
+    return res.status(503).json({ success: false, message: "Profile photo could not be uploaded" });
+  }
+}
+
+async function getProfilePhoto(req, res) {
+  const field = PROFILE_PHOTO_FIELDS[req.params.module];
+  const config = field && MODULES[req.params.module];
+  if (!config || !validId(req.params.recordId)) return res.status(404).json({ success: false, message: "Profile photo not found" });
+  try {
+    const scope = await caregiverScope(req, req.params.module);
+    const record = await req.models[config.model].findOne({ _id: req.params.recordId, ...(scope || {}) }).select(field).lean();
+    const storageKey = typeof record?.[field] === "string" && record[field].startsWith("private:") ? record[field].slice("private:".length) : "";
+    const match = storageKey.match(/^([a-f0-9-]{36})\.(jpg|png|webp)$/);
+    if (!match) return res.status(404).json({ success: false, message: "Profile photo not found" });
+    const mimeType = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" }[match[2]];
+    const filePath = path.join(__dirname, "..", "private_uploads", "daycare", req.tenant._id.toString(), "profile_photos", storageKey);
+    res.set({ "Content-Type": mimeType, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store" });
+    return res.sendFile(filePath, (error) => { if (error && !res.headersSent) res.status(error.code === "ENOENT" ? 404 : 500).json({ success: false, message: "Profile photo is unavailable" }); });
+  } catch (error) {
+    console.error("Daycare profile photo read failed:", error.message);
+    return res.status(503).json({ success: false, message: "Profile photo could not be loaded" });
+  }
+}
+
+async function recordFeePayment(req, res) {
+  if (!validId(req.params.recordId)) return res.status(400).json({ success: false, message: "Invalid invoice id" });
+  const amount = Number(req.body?.amount);
+  const paymentDate = req.body?.paymentDate ? new Date(req.body.paymentDate) : new Date();
+  const allowedMethods = ["cash", "card", "bank", "jazzcash", "easypaisa", "other"];
+  if (!Number.isFinite(amount) || amount <= 0 || Number.isNaN(paymentDate.getTime()) || !allowedMethods.includes(req.body?.paymentMethod)) return res.status(400).json({ success: false, message: "Enter a valid amount, date, and payment method" });
+  const invoiceModel = req.models.FeeInvoice;
+  try {
+    const invoice = await invoiceModel.findOneAndUpdate(
+      { _id: req.params.recordId, $expr: { $lte: [{ $add: [{ $ifNull: ["$paidAmount", 0] }, amount] }, "$amount"] } },
+      { $inc: { paidAmount: amount }, $push: { payments: { amount, paymentDate, paymentMethod: req.body.paymentMethod, transactionReference: String(req.body.transactionReference || "").trim(), receivedBy: req.user.userId } } },
+      { new: true, runValidators: true },
+    );
+    if (!invoice) {
+      const exists = await invoiceModel.exists({ _id: req.params.recordId });
+      return exists ? res.status(400).json({ success: false, message: "Payment exceeds the remaining invoice balance" }) : res.status(404).json({ success: false, message: "Invoice not found" });
+    }
+    await invoiceModel.updateOne({ _id: invoice._id }, [{ $set: { status: { $cond: [{ $gte: ["$paidAmount", "$amount"] }, "paid", { $cond: [{ $gt: ["$paidAmount", 0] }, "partially-paid", { $cond: [{ $lt: ["$dueDate", new Date()] }, "overdue", "pending"] }] }] }, paidAt: { $cond: [{ $gte: ["$paidAmount", "$amount"] }, paymentDate, "$paidAt"] }, paymentMethod: req.body.paymentMethod, transactionReference: String(req.body.transactionReference || "").trim() } }]);
+    const updated = await invoiceModel.findById(invoice._id).populate(MODULES.fees.populate).lean();
+    await writeAudit(req, "payment-recorded", "fees", invoice._id, { amount, paymentMethod: req.body.paymentMethod, transactionReference: req.body.transactionReference || "" });
+    return res.status(201).json({ success: true, record: updated });
+  } catch (error) {
+    if (error.name === "ValidationError" || error.name === "CastError") return res.status(400).json({ success: false, message: error.message });
+    console.error("Daycare fee payment failed:", error.message);
+    return res.status(503).json({ success: false, message: "Payment could not be recorded" });
+  }
+}
+
 async function saveSettings(req, res) {
   const fields = ["daycareName", "logo", "email", "phone", "alternatePhone", "address", "city", "province", "country", "postalCode", "website", "description", "openingTime", "closingTime", "workingDays", "emergencyContact", "licenseNumber", "defaultMonthlyFee", "registrationFee", "lateFee", "attendanceGraceMinutes", "notifyParentsOnAttendance"];
   try {
@@ -618,4 +748,4 @@ async function changePassword(req, res) {
   }
 }
 
-module.exports = { listRecords, createRecord, updateRecord, deleteRecord, getOverview, getSettings, saveSettings, listUsers, createUser, updateUser, logLogout, uploadDocument, downloadDocument, changePassword };
+module.exports = { listRecords, createRecord, updateRecord, deleteRecord, getOverview, getSettings, saveSettings, listUsers, createUser, updateUser, resetParentPassword, logLogout, uploadDocument, downloadDocument, uploadProfilePhoto, getProfilePhoto, recordFeePayment, changePassword };

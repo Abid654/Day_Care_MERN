@@ -19,7 +19,9 @@ const AppRoutes = () => {
         <Route path="/" element={<Login />} />
         <Route path="/admin" element={<Login adminOnly />} />
         <Route path="/admin/dashboard" element={<ProtectedRoute roles={["admin"]}><Suspense fallback={<RouteLoading />}><AdminDashboard /></Suspense></ProtectedRoute>} />
+        <Route path="/admin/daycares" element={<ProtectedRoute roles={["admin"]}><Suspense fallback={<RouteLoading />}><AdminDashboard /></Suspense></ProtectedRoute>} />
         <Route path="/admin/daycares/:daycareId" element={<ProtectedRoute roles={["admin"]}><Suspense fallback={<RouteLoading />}><DaycareProfilePage adminView /></Suspense></ProtectedRoute>} />
+        <Route path="/admin/:module" element={<ProtectedRoute roles={["admin"]}><Suspense fallback={<RouteLoading />}><AdminDashboard /></Suspense></ProtectedRoute>} />
         <Route path="/register" element={<Register />} />
         <Route path="/parent/dashboard" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><ParentDashboard /></Suspense></ProtectedRoute>} />
         <Route path="/daycares/:daycareId" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><DaycareProfilePage /></Suspense></ProtectedRoute>} />

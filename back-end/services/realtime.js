@@ -1,6 +1,7 @@
 const authMiddleware = require("../middleware/authMiddleware");
 
 const staffRoom = (tenantId) => `tenant:${tenantId}:staff`;
+const staffMemberRoom = (tenantId, staffId) => `tenant:${tenantId}:staff-member:${staffId}`;
 const parentRoom = (tenantId, parentId) => `tenant:${tenantId}:parent:${parentId}`;
 
 async function emitToActiveParents(io, mainModels, tenantId, payload, filter = {}) {
@@ -46,6 +47,13 @@ function attachRealtime(io) {
     if (tenant && ["daycare", "manager", "caregiver"].includes(user.role)) {
       const tenantId = String(tenant._id);
       socket.join(staffRoom(tenantId));
+      if (["manager", "caregiver"].includes(user.role)) {
+        const staff = await socket.data.models.Staff.findOne({ userAccount: user.userId, status: "active" }).select("_id").lean().catch((error) => {
+          console.error("Realtime staff room lookup failed:", error.message);
+          return null;
+        });
+        if (staff) socket.join(staffMemberRoom(tenantId, staff._id));
+      }
     }
   });
 }
@@ -75,8 +83,13 @@ async function publishCenterNotification(req, record) {
     const parentIds = await req.models.Child.distinct("parentContact", { classGroup: record.classGroup, status: { $ne: "inactive" }, parentContact: { $ne: null } });
     const links = parentIds.length ? await req.mainModels.ParentTenantLink.find({ tenant: req.tenant._id, daycareParent: { $in: parentIds }, isActive: true }).select("daycareParent").lean() : [];
     for (const link of links) io.to(parentRoom(tenantId, link.daycareParent)).emit("notification:new", payload);
+  } else if (record.audience === "child" && record.child) {
+    const child = await req.models.Child.findOne({ _id: record.child, status: { $ne: "inactive" } }).select("parentContact").lean();
+    if (child?.parentContact) await emitToActiveParents(io, req.mainModels, req.tenant._id, payload, { daycareParent: child.parentContact });
   } else if (record.audience === "staff") {
     io.to(staffRoom(tenantId)).emit("notification:new", payload);
+  } else if (record.audience === "staff-member" && record.staffMember) {
+    io.to(staffMemberRoom(tenantId, record.staffMember)).emit("notification:new", payload);
   } else if (record.audience === "all") {
     io.to(staffRoom(tenantId)).emit("notification:new", payload);
     await emitToActiveParents(io, req.mainModels, req.tenant._id, payload);

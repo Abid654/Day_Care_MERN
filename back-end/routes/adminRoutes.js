@@ -5,8 +5,11 @@ const daycareController = require("../controllers/daycareController");
 
 const router = express.Router();
 router.use(authMiddleware, requireRole("admin"));
+router.get("/overview", daycareController.getAdminOverview);
+router.get("/records/:module", daycareController.listAdminRecords);
 router.get("/daycares", daycareController.listAdminDaycares);
 router.get("/daycares/:tenantId", daycareController.getAdminDaycare);
 router.patch("/daycares/:tenantId/review", daycareController.reviewDaycare);
+router.patch("/daycares/:tenantId/status", daycareController.changeAdminDaycareStatus);
 
 module.exports = router;

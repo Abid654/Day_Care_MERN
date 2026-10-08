@@ -16,3 +16,9 @@ export const uploadDaycareDocument = (file, metadata, token, documentId) => apiC
 });
 export const downloadDaycareDocument = (id, token) => apiClient.get(`/daycare/management/documents/${id}/file`, { ...authConfig(token), responseType: "blob" });
 export const changeDaycarePassword = (payload, token) => apiClient.put("/daycare/management/security/password", payload, authConfig(token));
+export const uploadManagementProfilePhoto = (module, id, file, token) => apiClient.post(`/daycare/management/${module}/${id}/photo`, file, {
+    ...authConfig(token), headers: { ...authConfig(token).headers, "Content-Type": file.type },
+});
+export const getManagementProfilePhoto = (module, id, token) => apiClient.get(`/daycare/management/${module}/${id}/photo`, { ...authConfig(token), responseType: "blob" });
+export const recordFeePayment = (id, payment, token) => apiClient.post(`/daycare/management/fees/${id}/payments`, payment, authConfig(token));
+export const resetDaycareParentPassword = (id, token) => apiClient.post(`/daycare/management/parents/${id}/reset-password`, {}, authConfig(token));
