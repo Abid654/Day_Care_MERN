@@ -15,7 +15,7 @@ module.exports = new mongoose.Schema({
   childcareType: { type: String, enum: ["full-time", "part-time"] },
   careStartTime: { type: String, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
   careEndTime: { type: String, match: /^([01]\d|2[0-3]):[0-5]\d$/ },
-  role: { type: String, enum: { values: ["parent", "daycare", "admin", "manager", "caregiver"], message: "Role is invalid" }, required: [true, "Role is required"] },
+  role: { type: String, enum: { values: ["parent", "daycare", "admin", "manager", "caregiver", "nurse", "support"], message: "Role is invalid" }, required: [true, "Role is required"] },
   isActive: { type: Boolean, default: true },
   tokenVersion: { type: Number, default: 0 },
 }, { timestamps: true });

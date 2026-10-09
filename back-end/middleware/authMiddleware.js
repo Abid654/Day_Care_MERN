@@ -7,11 +7,11 @@ async function authMiddleware(req, res, next) {
     const header = req.headers.authorization;
     if (!header || !header.startsWith("Bearer ")) return res.status(401).json({ success: false, message: "Access denied. No token provided" });
     const decoded = jwt.verify(header.slice(7), process.env.JWT_SECRET);
-    if (!mongoose.Types.ObjectId.isValid(decoded.userId) || !["parent", "daycare", "admin", "manager", "caregiver"].includes(decoded.role)) return res.status(401).json({ success: false, message: "Invalid token claims" });
+    if (!mongoose.Types.ObjectId.isValid(decoded.userId) || !["parent", "daycare", "admin", "manager", "caregiver", "nurse", "support"].includes(decoded.role)) return res.status(401).json({ success: false, message: "Invalid token claims" });
     const mainModels = getMainModels();
     let permissions = {};
 
-    if (["daycare", "manager", "caregiver"].includes(decoded.role)) {
+    if (["daycare", "manager", "caregiver", "nurse", "support"].includes(decoded.role)) {
       if (!mongoose.Types.ObjectId.isValid(decoded.tenantId)) return res.status(401).json({ success: false, message: "Invalid tenant claim" });
       const tenant = await mainModels.Tenant.findOne({ _id: decoded.tenantId, status: "active" }).lean();
       if (!tenant) return res.status(403).json({ success: false, message: "Daycare tenant is unavailable" });

@@ -297,7 +297,7 @@ async function listAdminRecords(req, res) {
   if (!allowedModules.includes(moduleName)) return res.status(404).json({ success: false, message: "Platform module not found" });
   try {
     const main = req.mainModels;
-    const tenants = await main.Tenant.find({ status: { $in: ["active", "suspended", "inactive"] } }).select("_id name ownerUserId databaseName status listingStatus createdAt").lean();
+    const tenants = await main.Tenant.find({ status: { $in: ["active", "suspended", "inactive"] } }).select("_id name ownerUserId databaseName status listingStatus userLimit createdAt").lean();
     const tenantNameById = new Map(tenants.map((tenant) => [String(tenant._id), tenant.name]));
     const parentUsers = await main.User.find({ role: "parent" }).select("_id name email phone isActive createdAt").lean();
     const parentById = new Map(parentUsers.map((parent) => [String(parent._id), parent]));
@@ -326,20 +326,14 @@ async function listAdminRecords(req, res) {
       }
       rows = [...linked.values()];
     } else if (moduleName === "users") {
-      rows = parentUsers.map((user) => ({ id: user._id, name: user.name, email: user.email, phone: user.phone, role: "parent", isActive: user.isActive, createdAt: user.createdAt }));
+      rows = [];
       for (const tenant of tenants) {
         const models = getTenantModels(getTenantConnection(tenant.databaseName));
         const [owner, memberships] = await Promise.all([
           models.User.findOne({ _id: tenant.ownerUserId, role: "daycare" }).select("_id name email phone isActive createdAt").lean(),
           main.TenantMembership.find({ tenant: tenant._id }).select("user email role isActive createdAt").lean(),
         ]);
-        if (owner) rows.push({ id: owner._id, name: owner.name, email: owner.email, phone: owner.phone, role: "daycare", isActive: owner.isActive, createdAt: owner.createdAt, daycare: tenant.name });
-        const membershipsUsers = await models.User.find({ _id: { $in: memberships.map((membership) => membership.user) } }).select("_id name phone isActive createdAt").lean();
-        const accounts = new Map(membershipsUsers.map((account) => [String(account._id), account]));
-        for (const membership of memberships) {
-          const account = accounts.get(String(membership.user));
-          rows.push({ id: membership.user, name: account?.name || membership.email, email: membership.email, phone: account?.phone || "", role: membership.role, isActive: membership.isActive && account?.isActive, createdAt: account?.createdAt || membership.createdAt, daycare: tenant.name });
-        }
+        if (owner) rows.push({ id: owner._id, name: owner.name, email: owner.email, phone: owner.phone, role: "daycare admin", isActive: owner.isActive && tenant.status === "active", createdAt: owner.createdAt, daycare: tenant.name, daycareId: tenant._id, userLimit: Math.max(10, Number(tenant.userLimit) || 10), userCount: memberships.filter((membership) => membership.isActive).length });
       }
     } else {
       const settled = await Promise.allSettled(tenants.map(async (tenant) => {
@@ -370,8 +364,13 @@ async function listAdminRecords(req, res) {
           return records.map((item) => ({ id: item._id, parentId: item.reviewer, parent: reviewerById.get(String(item.reviewer))?.name || "Parent", daycareOwnerId: item.daycare, childId: item.child?._id, child: item.child?.name || "", rating: item.rating, comment: item.comment, reviewType: item.reviewType, createdAt: item.createdAt, daycareId: tenant._id, daycare: tenant.name }));
         }
         if (moduleName === "activity-logs") {
-          records = await models.AuditLog.find({}).sort({ createdAt: -1 }).limit(250).select("user action module record metadata ipAddress createdAt").populate("user", "name email role").lean();
-          return records.map((item) => ({ id: item._id, user: item.user?.name || "System", email: item.user?.email || "", role: item.user?.role || "unknown", action: item.action, module: item.module, record: item.record, metadata: item.metadata, ipAddress: item.ipAddress || "", createdAt: item.createdAt, daycare: tenant.name }));
+          const [activityCount, latestActivity, owner, profile] = await Promise.all([
+            models.AuditLog.countDocuments({}),
+            models.AuditLog.findOne({}).sort({ createdAt: -1 }).select("createdAt").lean(),
+            models.User.findOne({ _id: tenant.ownerUserId, role: "daycare" }).select("name").lean(),
+            models.DaycareProfile.findOne({ user: tenant.ownerUserId }).select("daycareName").lean(),
+          ]);
+          return [{ id: tenant._id, daycareId: tenant._id, daycareAdmin: owner?.name || "Unknown admin", daycare: profile?.daycareName || tenant.name, activityCount, createdAt: latestActivity?.createdAt || tenant.createdAt }];
         }
         return [];
       }));
@@ -454,6 +453,97 @@ async function getAdminDaycare(req, res) {
   }
 }
 
+async function listAdminDaycareUsers(req, res) {
+  if (!mongoose.Types.ObjectId.isValid(req.params.tenantId)) return res.status(400).json({ success: false, message: "Invalid daycare id" });
+  try {
+    const tenant = await req.mainModels.Tenant.findById(req.params.tenantId).select("_id name databaseName userLimit status").lean();
+    if (!tenant) return res.status(404).json({ success: false, message: "Daycare not found" });
+    const memberships = await req.mainModels.TenantMembership.find({ tenant: tenant._id }).select("user email role permissions isActive lastLoginAt createdAt").sort({ createdAt: -1 }).lean();
+    const models = getTenantModels(getTenantConnection(tenant.databaseName));
+    const accounts = await models.User.find({ _id: { $in: memberships.map((membership) => membership.user) } }).select("_id name phone isActive createdAt").lean();
+    const accountById = new Map(accounts.map((account) => [String(account._id), account]));
+    return res.json({ success: true, daycare: { id: tenant._id, name: tenant.name, userLimit: Math.max(10, Number(tenant.userLimit) || 10), userCount: memberships.filter((membership) => membership.isActive).length }, users: memberships.map((membership) => {
+      const account = accountById.get(String(membership.user));
+      const permissions = membership.permissions instanceof Map ? Object.fromEntries(membership.permissions.entries()) : membership.permissions || {};
+      return { id: membership.user, name: account?.name || membership.email, email: membership.email, phone: account?.phone || "", role: membership.role, isActive: Boolean(membership.isActive && account?.isActive), permissions, lastLoginAt: membership.lastLoginAt, createdAt: account?.createdAt || membership.createdAt };
+    }) });
+  } catch (error) {
+    console.error("Admin daycare users listing failed:", error.message);
+    return res.status(503).json({ success: false, message: "Daycare users could not be loaded" });
+  }
+}
+
+async function listAdminDaycareActivityLogs(req, res) {
+  if (!mongoose.Types.ObjectId.isValid(req.params.tenantId)) return res.status(400).json({ success: false, message: "Invalid daycare id" });
+  try {
+    const tenant = await req.mainModels.Tenant.findById(req.params.tenantId).select("_id name databaseName").lean();
+    if (!tenant) return res.status(404).json({ success: false, message: "Daycare not found" });
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+    const models = getTenantModels(getTenantConnection(tenant.databaseName));
+    const [logs, total] = await Promise.all([
+      models.AuditLog.find({}).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
+        .select("user action module record metadata ipAddress createdAt")
+        .populate("user", "name email role").lean(),
+      models.AuditLog.countDocuments({}),
+    ]);
+    return res.json({ success: true, daycare: { id: tenant._id, name: tenant.name }, logs: logs.map((item) => ({ id: item._id, user: item.user?.name || "System", email: item.user?.email || "", role: item.user?.role || "unknown", action: item.action, module: item.module, record: item.record, metadata: item.metadata, ipAddress: item.ipAddress || "", createdAt: item.createdAt })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+  } catch (error) {
+    console.error("Admin daycare activity log listing failed:", error.message);
+    return res.status(503).json({ success: false, message: "Daycare activity logs could not be loaded" });
+  }
+}
+
+async function updateAdminDaycareUserLimit(req, res) {
+  if (!mongoose.Types.ObjectId.isValid(req.params.tenantId)) return res.status(400).json({ success: false, message: "Invalid daycare id" });
+  const userLimit = Number(req.body?.userLimit);
+  if (!Number.isInteger(userLimit) || userLimit < 10 || userLimit > 10000) return res.status(400).json({ success: false, message: "User allowance must be a whole number from 10 to 10,000" });
+  try {
+    const tenant = await req.mainModels.Tenant.findByIdAndUpdate(req.params.tenantId, { $set: { userLimit } }, { new: true, runValidators: true }).select("_id name userLimit").lean();
+    if (!tenant) return res.status(404).json({ success: false, message: "Daycare not found" });
+    return res.json({ success: true, daycare: { id: tenant._id, name: tenant.name, userLimit: tenant.userLimit }, message: "Daycare user allowance updated" });
+  } catch (error) {
+    console.error("Admin daycare user allowance update failed:", error.message);
+    return res.status(503).json({ success: false, message: "Daycare user allowance could not be updated" });
+  }
+}
+
+const ADMIN_PERMISSION_MODULES = new Set(["dashboard", "children", "parents", "staff", "classes", "attendance", "staffAttendance", "dailyActivities", "fees", "leave", "complaints", "requests", "pickupPersons", "pickupLogs", "notifications", "announcements", "events", "documents", "activity", "reports", "settings"]);
+const ADMIN_PERMISSION_ACTIONS = new Set(["read", "create", "update", "delete"]);
+
+async function updateAdminDaycareUser(req, res) {
+  if (!mongoose.Types.ObjectId.isValid(req.params.tenantId) || !mongoose.Types.ObjectId.isValid(req.params.userId)) return res.status(400).json({ success: false, message: "Invalid daycare or user id" });
+  try {
+    const tenant = await req.mainModels.Tenant.findById(req.params.tenantId).select("databaseName").lean();
+    if (!tenant) return res.status(404).json({ success: false, message: "Daycare not found" });
+    const membership = await req.mainModels.TenantMembership.findOne({ tenant: tenant._id, user: req.params.userId });
+    if (!membership) return res.status(404).json({ success: false, message: "Daycare user not found" });
+    const updates = {};
+    if (typeof req.body?.isActive === "boolean") updates.isActive = req.body.isActive;
+    if (req.body?.permissions && typeof req.body.permissions === "object" && !Array.isArray(req.body.permissions)) {
+      const permissions = {};
+      for (const [moduleName, values] of Object.entries(req.body.permissions)) {
+        if (!ADMIN_PERMISSION_MODULES.has(moduleName) || !Array.isArray(values)) continue;
+        permissions[moduleName] = [...new Set(values.filter((action) => ADMIN_PERMISSION_ACTIONS.has(action)))];
+      }
+      updates.permissions = permissions;
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ success: false, message: "Provide account status or module permissions" });
+    const wasActive = membership.isActive;
+    Object.assign(membership, updates);
+    await membership.save();
+    const models = getTenantModels(getTenantConnection(tenant.databaseName));
+    const accountUpdate = { $set: { isActive: membership.isActive } };
+    if (wasActive !== membership.isActive) accountUpdate.$inc = { tokenVersion: 1 };
+    await models.User.updateOne({ _id: membership.user }, accountUpdate);
+      const permissions = membership.permissions instanceof Map ? Object.fromEntries(membership.permissions.entries()) : membership.permissions || {};
+      return res.json({ success: true, user: { id: membership.user, role: membership.role, isActive: membership.isActive, permissions }, message: "Daycare user access updated" });
+  } catch (error) {
+    console.error("Admin daycare user update failed:", error.message);
+    return res.status(503).json({ success: false, message: "Daycare user access could not be updated" });
+  }
+}
+
 async function reviewDaycare(req, res) {
   try {
     const { tenantId } = req.params;
@@ -516,4 +606,4 @@ async function changeAdminDaycareStatus(req, res) {
   }
 }
 
-module.exports = { listDaycares, getPublicDaycare, getMyProfile, saveMyProfile, uploadProfilePhoto, listAdminDaycares, getAdminOverview, listAdminRecords, getAdminDaycare, reviewDaycare, changeAdminDaycareStatus };
+module.exports = { listDaycares, getPublicDaycare, getMyProfile, saveMyProfile, uploadProfilePhoto, listAdminDaycares, getAdminOverview, listAdminRecords, getAdminDaycare, listAdminDaycareUsers, listAdminDaycareActivityLogs, updateAdminDaycareUserLimit, updateAdminDaycareUser, reviewDaycare, changeAdminDaycareStatus };

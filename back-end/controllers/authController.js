@@ -82,8 +82,8 @@ const loginUser = async (req, res) => {
     if ((portal === "admin" && user.role !== "admin") || (portal === "standard" && user.role === "admin")) {
       return res.status(403).json({ success: false, message: portal === "admin" ? "Admin account required" : "Administrators must sign in at /admin" });
     }
-    if (["daycare", "manager", "caregiver"].includes(user.role) && !tenant) return res.status(403).json({ success: false, message: "Daycare tenant is unavailable" });
-    if (["manager", "caregiver"].includes(user.role) && !membership) return res.status(403).json({ success: false, message: "Daycare access is unavailable" });
+    if (["daycare", "manager", "caregiver", "nurse", "support"].includes(user.role) && !tenant) return res.status(403).json({ success: false, message: "Daycare tenant is unavailable" });
+    if (["manager", "caregiver", "nurse", "support"].includes(user.role) && !membership) return res.status(403).json({ success: false, message: "Daycare access is unavailable" });
     if (membership) await mainModels.TenantMembership.updateOne({ _id: membership._id }, { $set: { lastLoginAt: new Date() } });
     const token = jwt.sign({ userId: user._id.toString(), role: user.role, tokenVersion: user.tokenVersion || 0, ...(tenant ? { tenantId: tenant._id.toString() } : {}) }, process.env.JWT_SECRET, { expiresIn: "1d" });
     if (tenant && models.AuditLog) {

@@ -256,6 +256,7 @@ import { login } from "../api/authApi";
 import { loginSchema } from "../validation/authSchemas";
 import { useDispatch } from "react-redux";
 import { setCredentials } from "../redux/slices/authSlice";
+import { getLandingPathForRole } from "../utils/daycareRoutes";
 
 const Login = ({ adminOnly = false }) => {
     const navigate = useNavigate();
@@ -285,16 +286,7 @@ const Login = ({ adminOnly = false }) => {
 
             toast.success(response.data.message);
 
-            // Role based redirect
-            if (role === "parent") {
-                navigate("/parent/dashboard");
-            } else if (["daycare", "manager", "caregiver"].includes(role)) {
-                navigate("/daycare/dashboard");
-            } else if (role === "admin") {
-                navigate("/admin/dashboard");
-            } else {
-                navigate("/");
-            }
+            navigate(getLandingPathForRole(role), { replace: true });
 
         } catch (error) {
             console.error("Login Error:", error);

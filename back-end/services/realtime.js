@@ -44,10 +44,10 @@ function attachRealtime(io) {
       return;
     }
 
-    if (tenant && ["daycare", "manager", "caregiver"].includes(user.role)) {
+    if (tenant && ["daycare", "manager", "caregiver", "nurse", "support"].includes(user.role)) {
       const tenantId = String(tenant._id);
       socket.join(staffRoom(tenantId));
-      if (["manager", "caregiver"].includes(user.role)) {
+      if (["manager", "caregiver", "nurse", "support"].includes(user.role)) {
         const staff = await socket.data.models.Staff.findOne({ userAccount: user.userId, status: "active" }).select("_id").lean().catch((error) => {
           console.error("Realtime staff room lookup failed:", error.message);
           return null;

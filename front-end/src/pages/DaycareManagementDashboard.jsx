@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import { toast } from "react-toastify";
 import { FormikProvider, useFormik } from "formik";
@@ -13,8 +13,8 @@ import {
 import {
     createManagementRecord, deleteManagementRecord, getDaycareSettings, getManagementOverview,
     listManagementRecords, saveDaycareSettings, updateManagementRecord, listDaycareUsers, createDaycareUser, updateDaycareUser, logDaycareLogout,
-    uploadDaycareDocument, downloadDaycareDocument, uploadManagementProfilePhoto, getManagementProfilePhoto,
-    changeDaycarePassword,
+    uploadDaycareDocument, downloadDaycareDocument, uploadManagementProfilePhoto, getManagementProfilePhoto, getDaycareAccountPhoto,
+    changeDaycarePassword, deleteDaycareUser,
 } from "../api/managementApi";
 import { getDaycareProfile, uploadDaycarePhoto } from "../api/daycareApi";
 import { getAssetUrl } from "../api/client";
@@ -25,6 +25,7 @@ import { selectAuth, clearCredentials } from "../redux/slices/authSlice";
 import { clearDashboard, clearDashboardNotifications, pushDashboardNotification, setDashboardLoading, setOverview } from "../redux/slices/dashboardSlice";
 import ActionModal from "../components/ActionModal";
 import { openNativePicker } from "../utils/openNativePicker";
+import { getDaycareDashboardPath } from "../utils/daycareRoutes";
 
 const field = (name, label, type = "text", options = {}) => ({ name, label, type, ...options });
 const MODULE_META = {
@@ -69,6 +70,8 @@ const ROLE_DEFAULT_PERMISSIONS = {
         pickupPersons: ["read", "create", "update"], pickupLogs: ["read", "create"], notifications: ["read", "create"], announcements: ["read", "create", "update"], events: ["read", "create", "update"], documents: ["read", "create", "update"], activity: ["read"], reports: ["read"], settings: ["read"],
     },
     caregiver: { dashboard: ["read"], children: ["read"], attendance: ["read", "create", "update"], dailyActivities: ["read", "create", "update"], pickupPersons: ["read"], pickupLogs: ["read", "create"], events: ["read"], announcements: ["read"] },
+    nurse: { dashboard: ["read"], children: ["read"], attendance: ["read", "create", "update"], dailyActivities: ["read", "create", "update"], pickupPersons: ["read"], pickupLogs: ["read"], documents: ["read"], events: ["read"], announcements: ["read"] },
+    support: { dashboard: ["read"] },
 };
 const getUserModulePermissions = (user, key) => {
     const assigned = user?.permissions?.[key];
@@ -79,6 +82,7 @@ const MONEY = new Intl.NumberFormat("en-PK", { maximumFractionDigits: 0 });
 
 const DaycareManagementDashboard = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { module: routeModule } = useParams();
     const dispatch = useDispatch();
     const { user, token } = useSelector(selectAuth);
@@ -89,7 +93,13 @@ const DaycareManagementDashboard = () => {
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
     const [profileOpen, setProfileOpen] = useState(false);
-    const [profileModalOpen, setProfileModalOpen] = useState(false);
+    const [accountPhotoUrl, setAccountPhotoUrl] = useState("");
+
+    useEffect(() => {
+        if (user?.role !== "daycare" && location.pathname.startsWith("/daycare/dashboard")) {
+            navigate(getDaycareDashboardPath(user?.role, module), { replace: true });
+        }
+    }, [location.pathname, module, navigate, user?.role]);
     const [notificationOpen, setNotificationOpen] = useState(false);
     const [notificationLoading, setNotificationLoading] = useState(false);
     const [latestNotifications, setLatestNotifications] = useState([]);
@@ -97,7 +107,36 @@ const DaycareManagementDashboard = () => {
     const lastReviewNotice = useRef("");
 
     useEffect(() => {
-        if (!token || !["daycare", "manager", "caregiver"].includes(user?.role)) navigate("/", { replace: true });
+        let active = true;
+        let objectUrl = "";
+        if (!user?.profilePhoto || !token) { setAccountPhotoUrl(""); return undefined; }
+        getDaycareAccountPhoto(token).then(({ data }) => {
+            if (!active) return;
+            objectUrl = URL.createObjectURL(data);
+            setAccountPhotoUrl(objectUrl);
+        }).catch(() => { if (active) setAccountPhotoUrl(""); });
+        return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    }, [token, user?.profilePhoto]);
+
+    useEffect(() => {
+        if (!profileOpen) return undefined;
+        const closeOnOutsideClick = (event) => {
+            if (!event.target.closest("[data-daycare-account-menu]")) setProfileOpen(false);
+        };
+        document.addEventListener("pointerdown", closeOnOutsideClick);
+        return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+    }, [profileOpen]);
+    useEffect(() => {
+        if (!notificationOpen) return undefined;
+        const closeOnOutsideClick = (event) => {
+            if (!event.target.closest("[data-notification-menu]")) setNotificationOpen(false);
+        };
+        document.addEventListener("pointerdown", closeOnOutsideClick);
+        return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+    }, [notificationOpen]);
+
+    useEffect(() => {
+        if (!token || !["daycare", "manager", "caregiver", "nurse", "support"].includes(user?.role)) navigate("/", { replace: true });
     }, [navigate, token, user?.role]);
 
     useEffect(() => {
@@ -133,7 +172,7 @@ const DaycareManagementDashboard = () => {
     }, [token, user?.role]);
 
     useEffect(() => {
-        if (!token || !["daycare", "manager", "caregiver"].includes(user?.role)) return undefined;
+        if (!token || !["daycare", "manager", "caregiver", "nurse", "support"].includes(user?.role)) return undefined;
         const socket = connectRealtime(token);
         if (!socket) return undefined;
         const handleNotification = (notification) => {
@@ -157,15 +196,19 @@ const DaycareManagementDashboard = () => {
     }, [notificationOpen]);
 
     useEffect(() => {
-        if (routeModule && !NAV.some((item) => item.key === routeModule)) navigate("/daycare/dashboard", { replace: true });
-        const item = NAV.find((entry) => entry.key === routeModule);
-        if (item && user?.role !== "daycare") {
+        const activeModule = routeModule || "overview";
+        const item = NAV.find((entry) => entry.key === activeModule);
+        if (!item) { navigate(getDaycareDashboardPath(user?.role), { replace: true }); return; }
+        if (user?.role !== "daycare") {
             const permissionKey = item.key === "overview" ? "dashboard" : item.key;
-            if (!getUserModulePermissions(user, permissionKey).includes("read")) navigate("/daycare/dashboard", { replace: true });
+            if (!getUserModulePermissions(user, permissionKey).includes("read")) {
+                const firstAllowedModule = NAV.find((entry) => entry.key !== "users" && getUserModulePermissions(user, entry.key === "overview" ? "dashboard" : entry.key).includes("read"));
+                if (firstAllowedModule) navigate(getDaycareDashboardPath(user?.role, firstAllowedModule.key), { replace: true });
+            }
         }
     }, [navigate, routeModule, user]);
 
-    if (!token || !["daycare", "manager", "caregiver"].includes(user?.role)) return null;
+    if (!token || !["daycare", "manager", "caregiver", "nurse", "support"].includes(user?.role)) return null;
 
     const logout = () => {
         if (token) logDaycareLogout(token).catch(() => {});
@@ -175,7 +218,8 @@ const DaycareManagementDashboard = () => {
         dispatch(clearDashboard());
         navigate("/", { replace: true });
     };
-    const selectModule = (next) => { navigate(next === "overview" ? "/daycare/dashboard" : `/daycare/dashboard/${next}`); setSidebarOpen(false); setProfileOpen(false); setNotificationOpen(false); };
+
+    const selectModule = (next) => { navigate(getDaycareDashboardPath(user?.role, next)); setSidebarOpen(false); setProfileOpen(false); setNotificationOpen(false); };
     const toggleNotifications = async () => {
         const opening = !notificationOpen;
         setNotificationOpen(opening);
@@ -201,31 +245,34 @@ const DaycareManagementDashboard = () => {
         const permissionKey = item.key === "overview" ? "dashboard" : item.key;
         return getUserModulePermissions(user, permissionKey).includes("read");
     });
+    const currentPermissionKey = module === "overview" ? "dashboard" : module;
+    const canReadCurrentModule = user?.role === "daycare" || getUserModulePermissions(user, currentPermissionKey).includes("read");
     const greetingName = user.name?.trim().split(/\s+/)[0] || "there";
+    const roleLabel = user.role === "daycare" ? "Daycare administrator" : user.role.charAt(0).toUpperCase() + user.role.slice(1);
 
     return (
         <div className="min-h-screen bg-slate-50 text-slate-800">
             {sidebarOpen && <button aria-label="Close navigation" onClick={() => setSidebarOpen(false)} className="fixed inset-0 z-30 bg-slate-950/40 lg:hidden" />}
             <aside className={`fixed inset-y-0 left-0 z-40 flex ${sidebarCollapsed ? "w-[78px]" : "w-[270px]"} flex-col border-r border-slate-200 bg-white transition-all duration-200 ${sidebarOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0"}`}>
-                <div className={`flex h-[72px] shrink-0 items-center justify-between border-b border-slate-100 ${sidebarCollapsed ? "px-4" : "px-5"}`}><div className="flex items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white"><ShieldCheck size={21} /></span>{!sidebarCollapsed && <div><p className="font-extrabold text-slate-900">Daycare Admin</p><p className="text-[11px] text-slate-500">Management portal</p></div>}</div><button onClick={() => setSidebarOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 lg:hidden" aria-label="Close menu"><X size={18} /></button></div>
+                <div className={`flex h-[72px] shrink-0 items-center justify-between border-b border-slate-100 ${sidebarCollapsed ? "px-4" : "px-5"}`}><div className="flex items-center gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white"><ShieldCheck size={21} /></span>{!sidebarCollapsed && <div><p className="font-extrabold text-slate-900">{roleLabel}</p><p className="text-[11px] text-slate-500">Daycare workspace</p></div>}</div><button onClick={() => setSidebarOpen(false)} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 lg:hidden" aria-label="Close menu"><X size={18} /></button></div>
                 <nav aria-label="Dashboard navigation" className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3">{visibleNav.map((item) => { const Icon = item.icon; return <button key={item.key} title={sidebarCollapsed ? item.label : undefined} aria-current={module === item.key ? "page" : undefined} onClick={() => selectModule(item.key)} className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-[13px] font-semibold transition ${module === item.key ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"}`}><Icon size={17} className="shrink-0" />{!sidebarCollapsed && <><span className="flex-1">{item.label}</span>{item.key === "complaints" && overview?.pendingComplaints > 0 && <span className="rounded-full bg-rose-100 px-2 py-0.5 text-[10px] text-rose-700">{overview.pendingComplaints}</span>}</>}</button>; })}</nav>
-                <div className={`shrink-0 border-t border-slate-100 p-4 ${sidebarCollapsed ? "flex justify-center" : ""}`}>{sidebarCollapsed ? <button title={user.name} onClick={() => setProfileModalOpen(true)} className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{user.name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</button> : <div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{user.name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-slate-800">{user.name}</p><p className="truncate text-xs capitalize text-slate-500">{user.role === "daycare" ? "Daycare administrator" : user.role}</p></div><button onClick={logout} aria-label="Sign out" className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600"><LogOut size={17} /></button></div>}</div>
+                <div className={`shrink-0 border-t border-slate-100 p-4 ${sidebarCollapsed ? "flex justify-center" : ""}`}>{sidebarCollapsed ? <button title={user.name} onClick={() => navigate("/daycare/profile")} className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{accountPhotoUrl ? <img src={accountPhotoUrl} alt="" className="h-full w-full object-cover" /> : (user.name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase())}</button> : <div className="flex items-center gap-3"><span className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{accountPhotoUrl ? <img src={accountPhotoUrl} alt="" className="h-full w-full object-cover" /> : (user.name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase())}</span><div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-slate-800">{user.name}</p><p className="truncate text-xs capitalize text-slate-500">{user.role === "daycare" ? "Daycare administrator" : user.role}</p></div><button onClick={logout} aria-label="Sign out" className="rounded-lg p-2 text-slate-400 hover:bg-rose-50 hover:text-rose-600"><LogOut size={17} /></button></div>}</div>
             </aside>
 
             <div className={`min-h-screen transition-[padding] duration-200 ${sidebarCollapsed ? "lg:pl-[78px]" : "lg:pl-[270px]"}`}>
-                <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-7"><div className="flex items-center gap-3"><button onClick={() => setSidebarCollapsed((value) => !value)} className="hidden rounded-xl p-2 text-slate-600 hover:bg-slate-100 lg:inline-flex" aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}</button><button onClick={() => setSidebarOpen(true)} className="rounded-xl p-2 text-slate-600 hover:bg-slate-100 lg:hidden" aria-label="Open menu"><Menu size={20} /></button><div><p className="text-[11px] font-bold uppercase tracking-wider text-indigo-600">Daycare workspace</p><h1 className="text-lg font-extrabold leading-tight text-slate-900">{currentNav.label}</h1></div></div><div className="flex items-center gap-2 sm:gap-3">{user.role === "daycare" && <button onClick={() => navigate("/daycare/profile/setup")} className="hidden rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 sm:block">Edit public profile</button>}<span title={currentDaycareName} className="hidden max-w-64 truncate rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 xl:inline-flex xl:items-center xl:gap-1.5"><span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />{currentDaycareName}</span><div className="relative" data-notification-menu><button onClick={toggleNotifications} aria-expanded={notificationOpen} aria-label="Open notifications" title="Open notifications" className="relative rounded-xl p-2 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600"><Bell size={18} />{(overview?.pendingComplaints || 0) + (overview?.pendingRequests || 0) > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">{(overview?.pendingComplaints || 0) + (overview?.pendingRequests || 0)}</span>}</button>{notificationOpen && <div className="absolute right-0 top-12 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"><div className="flex items-center justify-between border-b border-slate-100 px-4 py-3"><div><p className="text-sm font-bold text-slate-900">Latest notifications</p><p className="mt-0.5 text-xs text-slate-500">Recent messages for this daycare</p></div><span className="rounded-full bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-700">{latestNotifications.length}</span></div>{!canReadNotifications ? <p className="px-4 py-6 text-center text-sm text-slate-500">You do not have permission to view notifications.</p> : notificationLoading ? <p className="px-4 py-6 text-center text-sm text-slate-500">Loading notifications…</p> : latestNotifications.length ? <div className="max-h-80 overflow-y-auto">{latestNotifications.map((item) => <button key={item._id} onClick={() => selectModule("notifications")} className="block w-full border-b border-slate-100 px-4 py-3 text-left transition hover:bg-slate-50"><span className="block truncate text-sm font-semibold text-slate-800">{item.title}</span><span className="mt-1 block line-clamp-2 text-xs leading-5 text-slate-500">{item.message}</span><span className="mt-1.5 block text-[10px] text-slate-400">{item.sentAt ? new Date(item.sentAt).toLocaleString() : new Date(item.createdAt).toLocaleString()}</span></button>)}</div> : <p className="px-4 py-6 text-center text-sm text-slate-500">No notifications yet.</p>}{canReadNotifications && <button onClick={() => selectModule("notifications")} className="w-full bg-slate-50 px-4 py-3 text-left text-xs font-bold text-indigo-700 transition hover:bg-indigo-50">View all notifications</button>}</div>}</div><div className="relative"><button onClick={() => { setNotificationOpen(false); setProfileOpen((value) => !value); }} aria-expanded={profileOpen} aria-label="Open profile menu" className="flex items-center gap-2 rounded-xl p-1.5 hover:bg-slate-100"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{user.name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase()}</span><span className="hidden max-w-28 truncate text-sm font-semibold sm:block">{user.name}</span></button>{profileOpen && <div className="absolute right-0 top-12 z-30 w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button onClick={() => { setProfileOpen(false); setProfileModalOpen(true); }} className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Profile</button><button onClick={() => selectModule("settings")} className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Settings</button><button onClick={logout} className="w-full rounded-lg px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50">Logout</button></div>}</div></div></header>
+                <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-slate-200 bg-white/95 px-4 backdrop-blur sm:px-7"><div className="flex items-center gap-3"><button onClick={() => setSidebarCollapsed((value) => !value)} className="hidden rounded-xl p-2 text-slate-600 hover:bg-slate-100 lg:inline-flex" aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}>{sidebarCollapsed ? <PanelLeftOpen size={19} /> : <PanelLeftClose size={19} />}</button><button onClick={() => setSidebarOpen(true)} className="rounded-xl p-2 text-slate-600 hover:bg-slate-100 lg:hidden" aria-label="Open menu"><Menu size={20} /></button><div><p className="text-[11px] font-bold uppercase tracking-wider text-indigo-600">Daycare workspace</p><h1 className="text-lg font-extrabold leading-tight text-slate-900">{currentNav.label}</h1></div></div><div className="flex items-center gap-2 sm:gap-3">{user.role === "daycare" && <button onClick={() => navigate("/daycare/profile/setup")} className="hidden rounded-xl border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 sm:block">Edit public profile</button>}<span title={currentDaycareName} className="inline-flex max-w-40 items-center gap-2 truncate rounded-full bg-emerald-50 px-2 py-1.5 text-xs font-semibold text-emerald-700 sm:max-w-56 sm:px-3 xl:max-w-64">{overview?.settings?.logo ? <img src={getAssetUrl(overview.settings.logo)} alt="" className="h-7 w-7 shrink-0 rounded-full bg-white object-cover" /> : <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-500" />}<span className="truncate">{currentDaycareName}</span></span><div className="relative" data-notification-menu><button onClick={toggleNotifications} aria-expanded={notificationOpen} aria-label="Open notifications" title="Open notifications" className="relative rounded-xl p-2 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600"><Bell size={18} />{(overview?.pendingComplaints || 0) + (overview?.pendingRequests || 0) > 0 && <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">{(overview?.pendingComplaints || 0) + (overview?.pendingRequests || 0)}</span>}</button>{notificationOpen && <div className="absolute right-0 top-12 z-50 w-[min(22rem,calc(100vw-2rem))] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl"><div className="flex items-center justify-between border-b border-slate-100 px-4 py-3"><div><p className="text-sm font-bold text-slate-900">Latest notifications</p><p className="mt-0.5 text-xs text-slate-500">Recent messages for this daycare</p></div><span className="rounded-full bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-700">{latestNotifications.length}</span></div>{!canReadNotifications ? <p className="px-4 py-6 text-center text-sm text-slate-500">You do not have permission to view notifications.</p> : notificationLoading ? <p className="px-4 py-6 text-center text-sm text-slate-500">Loading notifications…</p> : latestNotifications.length ? <div className="max-h-80 overflow-y-auto">{latestNotifications.map((item) => <button key={item._id} onClick={() => selectModule("notifications")} className="block w-full border-b border-slate-100 px-4 py-3 text-left transition hover:bg-slate-50"><span className="block truncate text-sm font-semibold text-slate-800">{item.title}</span><span className="mt-1 block line-clamp-2 text-xs leading-5 text-slate-500">{item.message}</span><span className="mt-1.5 block text-[10px] text-slate-400">{item.sentAt ? new Date(item.sentAt).toLocaleString() : new Date(item.createdAt).toLocaleString()}</span></button>)}</div> : <p className="px-4 py-6 text-center text-sm text-slate-500">No notifications yet.</p>}{canReadNotifications && <button onClick={() => selectModule("notifications")} className="w-full bg-slate-50 px-4 py-3 text-left text-xs font-bold text-indigo-700 transition hover:bg-indigo-50">View all notifications</button>}</div>}</div><div className="relative" data-daycare-account-menu><button onClick={() => { setNotificationOpen(false); setProfileOpen((value) => !value); }} aria-expanded={profileOpen} aria-label="Open profile menu" className="flex items-center gap-2 rounded-xl p-1.5 hover:bg-slate-100"><span className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full bg-indigo-100 text-xs font-bold text-indigo-700">{accountPhotoUrl ? <img src={accountPhotoUrl} alt="" className="h-full w-full object-cover" /> : (user.name?.split(/\s+/).slice(0, 2).map((part) => part[0]).join("").toUpperCase())}</span><span className="hidden max-w-28 truncate text-sm font-semibold sm:block">{user.name}</span></button>{profileOpen && <div className="absolute right-0 top-12 z-30 w-48 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg"><button onClick={() => { setProfileOpen(false); navigate("/daycare/profile"); }} className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Profile</button><button onClick={() => selectModule("settings")} className="w-full rounded-lg px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50">Settings</button><button onClick={logout} className="w-full rounded-lg px-3 py-2 text-left text-sm text-rose-600 hover:bg-rose-50">Logout</button></div>}</div></div></header>
                 <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8">
                     {adminReviewNotice && <section role="alert" className="mb-5 flex flex-col gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 sm:flex-row sm:items-start sm:justify-between"><div><p className="font-bold text-amber-950">Admin requested more information</p><p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-amber-900">{adminReviewNotice.message}</p></div><button onClick={() => navigate("/daycare/profile/setup")} className="shrink-0 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-indigo-700">Open profile to update</button></section>}
                     {module === "notifications" && realtimeNotifications.length > 0 && <section aria-live="polite" className="mb-5 rounded-2xl border border-sky-200 bg-sky-50 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><h2 className="font-bold text-sky-900">Live notifications</h2><p className="text-xs text-sky-700">{realtimeNotifications.length} received during this session</p></div><button onClick={() => dispatch(clearDashboardNotifications())} className="rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-100">Clear</button></div><div className="mt-3 space-y-2">{realtimeNotifications.slice(0, 5).map((item) => <article key={item.id} className="rounded-xl bg-white/80 px-3 py-2"><p className="text-sm font-semibold text-slate-800">{item.title}</p><p className="mt-0.5 line-clamp-2 text-xs text-slate-600">{item.message}</p><p className="mt-1 text-[10px] text-slate-400">{item.daycareName} · {new Date(item.sentAt).toLocaleString()}</p></article>)}</div></section>}
-                    {module === "overview" && <OverviewPanel overview={overview} loading={overviewLoading} onSelect={selectModule} greeting={greetingName} />}
-                    {module === "settings" && <SettingsPanel token={token} canEdit={user.role === "daycare" || user.permissions?.settings?.includes("update")} />}
-                    {module === "reports" && <ReportsPanel token={token} overview={overview} />}
-                    {module === "activity" && <ModulePanel moduleKey="activity" token={token} />}
-                    {MODULE_META[module] && !["activity"].includes(module) && <ModulePanel key={module} moduleKey={module} token={token} />}
-                    {module === "users" && (user.role === "daycare" ? <AccessPanel token={token} /> : <EmptyState icon={ShieldCheck} title="Owner access required" detail="Only the daycare owner can create and manage dashboard accounts." />)}
+                    {!canReadCurrentModule && <EmptyState icon={ShieldCheck} title="Module access unavailable" detail="Your account does not have permission to view this module. Ask the daycare admin to update your access." />}
+                    {canReadCurrentModule && module === "overview" && <OverviewPanel overview={overview} loading={overviewLoading} onSelect={selectModule} greeting={greetingName} />}
+                    {canReadCurrentModule && module === "settings" && <SettingsPanel token={token} canEdit={user.role === "daycare" || user.permissions?.settings?.includes("update")} onSettingsSaved={(settings) => dispatch(setOverview({ ...overview, settings }))} />}
+                    {canReadCurrentModule && module === "reports" && <ReportsPanel token={token} overview={overview} />}
+                    {canReadCurrentModule && module === "activity" && <ModulePanel moduleKey="activity" token={token} />}
+                    {canReadCurrentModule && MODULE_META[module] && !["activity"].includes(module) && <ModulePanel key={module} moduleKey={module} token={token} />}
+                    {canReadCurrentModule && module === "users" && (user.role === "daycare" ? <AccessPanel token={token} /> : <EmptyState icon={ShieldCheck} title="Owner access required" detail="Only the daycare owner can create and manage dashboard accounts." />)}
                 </main>
             </div>
-            {profileModalOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4" onMouseDown={(event) => event.target === event.currentTarget && setProfileModalOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="admin-profile-title" className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"><div className="flex items-start justify-between"><div><p className="text-xs font-bold uppercase tracking-wide text-indigo-600">Account profile</p><h2 id="admin-profile-title" className="mt-1 text-xl font-extrabold text-slate-900">{user.name}</h2></div><button onClick={() => setProfileModalOpen(false)} aria-label="Close profile" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X size={18} /></button></div><dl className="mt-5 space-y-3 text-sm"><div><dt className="text-xs font-semibold text-slate-500">Email</dt><dd className="mt-0.5 break-all font-medium text-slate-800">{user.email}</dd></div><div><dt className="text-xs font-semibold text-slate-500">Role</dt><dd className="mt-0.5 capitalize font-medium text-slate-800">{user.role === "daycare" ? "Daycare administrator" : user.role}</dd></div></dl><button onClick={() => { setProfileModalOpen(false); selectModule("settings"); }} className="mt-6 w-full rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white">Open settings</button></section></div>}
         </div>
     );
 };
@@ -283,7 +330,7 @@ const ModulePanel = ({ moduleKey, token }) => {
     const [error, setError] = useState("");
     const [search, setSearch] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
-    const [status, setStatus] = useState("all");
+    const [status, setStatus] = useState(moduleKey === "staff" ? "active" : "all");
     const [category, setCategory] = useState("");
     const [dateFrom, setDateFrom] = useState("");
     const [dateTo, setDateTo] = useState("");
@@ -317,6 +364,7 @@ const ModulePanel = ({ moduleKey, token }) => {
         return () => { active = false; };
     }, [relationFields, token]);
 
+    useEffect(() => { setStatus(moduleKey === "staff" ? "active" : "all"); setPage(1); }, [moduleKey]);
     useEffect(() => { const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300); return () => clearTimeout(timer); }, [search]);
     const requestKey = JSON.stringify([moduleKey, page, debouncedSearch, status, category, dateFrom, dateTo, sort, relationFilters, refresh, token]);
     const loading = loadedRequestKey !== requestKey;
@@ -332,7 +380,7 @@ const ModulePanel = ({ moduleKey, token }) => {
     const removeRecord = async (record) => {
         const label = record.name || record.fullName || record.title || record.subject || record.invoiceNumber || meta.singular;
         setActionModal({ title: `Remove this ${meta.singular.toLowerCase()}?`, description: `“${label}” will be removed or deactivated in this daycare.`, confirmLabel: "Remove", tone: "danger", onConfirm: async () => {
-            try { await deleteManagementRecord(moduleKey, record._id, token); toast.success("Record removed."); setActionModal(null); setRefresh((value) => value + 1); }
+            try { await deleteManagementRecord(moduleKey, record._id, token); if (moduleKey === "staff") setStatus("active"); toast.success(moduleKey === "staff" ? "Staff member removed from the active list." : "Record removed."); setActionModal(null); setRefresh((value) => value + 1); }
             catch (requestError) { toast.error(requestError.response?.data?.message || "Could not remove record."); throw requestError; }
         } });
     };
@@ -402,7 +450,7 @@ const printFeeReceipt = (record) => {
     popup.document.close();
 };
 
-const IconAction = ({ children, label, onClick, tone = "default" }) => <button title={label} aria-label={label} onClick={onClick} className={`rounded-lg p-2 transition ${tone === "danger" ? "text-slate-400 hover:bg-rose-50 hover:text-rose-600" : "text-slate-400 hover:bg-indigo-50 hover:text-indigo-600"}`}>{children}</button>;
+const IconAction = ({ children, label, onClick, tone = "default" }) => { const hasVisibleLabel = ["Edit", "Delete"].includes(label); return <button title={label} aria-label={label} onClick={onClick} className={`inline-flex items-center gap-1.5 rounded-lg transition ${hasVisibleLabel ? "px-2.5 py-2 text-xs font-semibold" : "p-2"} ${tone === "danger" ? "text-rose-600 hover:bg-rose-50" : "text-slate-500 hover:bg-indigo-50 hover:text-indigo-600"}`}>{children}{hasVisibleLabel && <span>{label}</span>}</button>; };
 const CellValue = ({ value, status, field, record, moduleKey, token }) => {
     if (["profilePhoto", "photo", "image", "logo", "images"].includes(field)) {
         return value && record?._id && moduleKey
@@ -418,7 +466,11 @@ const CellValue = ({ value, status, field, record, moduleKey, token }) => {
     if (typeof value === "boolean") return value ? <Check size={16} className="text-emerald-600" /> : <span className="text-slate-400">No</span>;
     if (Array.isArray(value)) return <span className="block max-w-52 truncate">{value.map((entry) => typeof entry === "object" ? entry.name || entry.fullName || entry._id : entry).join(", ") || "—"}</span>;
     if (typeof value === "object") return <span className="block max-w-52 truncate" title={value.name || value.fullName || value._id}>{value.name || value.fullName || value.email || value._id}</span>;
-    if (status) return <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold capitalize text-slate-600">{String(value).replaceAll("-", " ")}</span>;
+    if (status) {
+        const normalizedStatus = String(value).toLowerCase();
+        const statusTone = normalizedStatus === "active" ? "bg-emerald-50 text-emerald-700" : normalizedStatus === "inactive" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-slate-600";
+        return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold capitalize ${statusTone}`}>{String(value).replaceAll("-", " ")}</span>;
+    }
     if (typeof value === "string" && !Number.isNaN(Date.parse(value)) && value.includes("T")) return new Date(value).toLocaleDateString();
     return <span className="block max-w-56 truncate" title={String(value)}>{String(value)}</span>;
 };
@@ -651,7 +703,7 @@ const SETTING_FIELDS = [
 ];
 const WEEK_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
-const SettingsPanel = ({ token, canEdit }) => {
+const SettingsPanel = ({ token, canEdit, onSettingsSaved }) => {
     const [settings, setSettings] = useState(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -662,7 +714,7 @@ const SettingsPanel = ({ token, canEdit }) => {
         description: settings?.description || "", workingDays: settings?.workingDays || ["monday", "tuesday", "wednesday", "thursday", "friday"],
         notifyParentsOnAttendance: settings?.notifyParentsOnAttendance ?? true,
     }, validationSchema: Yup.object({ daycareName: Yup.string().max(120).required("Daycare name is required."), email: Yup.string().email("Enter a valid email address."), website: Yup.string().url("Enter a valid URL.").nullable(), ...Object.fromEntries(["defaultMonthlyFee", "registrationFee", "lateFee", "attendanceGraceMinutes"].map((key) => [key, Yup.number().transform((value, original) => original === "" ? undefined : value).min(0, "Cannot be negative.").nullable()])) }), onSubmit: async (values) => {
-        try { setSaving(true); const payload = { ...values, workingDays: values.workingDays }; const { data } = await saveDaycareSettings(payload, token); setSettings(data.settings); toast.success("Daycare settings saved."); }
+        try { setSaving(true); const payload = { ...values, workingDays: values.workingDays }; const { data } = await saveDaycareSettings(payload, token); setSettings(data.settings); onSettingsSaved?.(data.settings); toast.success("Daycare settings saved."); }
         catch (error) { toast.error(error.response?.data?.message || "Could not save settings."); }
         finally { setSaving(false); }
     } });
@@ -746,7 +798,8 @@ const ReportsPanel = ({ token, overview }) => {
 };
 
 const AccessPanel = ({ token }) => {
-    const [users, setUsers] = useState([]);
+    const [allUsers, setUsers] = useState([]);
+    const [roleTab, setRoleTab] = useState("all");
     const [staffMembers, setStaffMembers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [staffLoading, setStaffLoading] = useState(true);
@@ -755,30 +808,43 @@ const AccessPanel = ({ token }) => {
     const [editingPermissions, setEditingPermissions] = useState(null);
     const [permissionDraft, setPermissionDraft] = useState({});
     const [actionModal, setActionModal] = useState(null);
-    const initialValues = { staffId: "", name: "", email: "", phone: "", role: "caregiver", password: "" };
-    const formik = useFormik({ initialValues, validationSchema: Yup.object({ staffId: Yup.string().required("Select a staff member."), name: Yup.string().trim().min(2).required("Name is required."), email: Yup.string().email().required("Email is required."), phone: Yup.string().trim().required("Phone is required."), role: Yup.string().oneOf(["manager", "caregiver"]).required(), password: Yup.string().min(8, "Use at least 8 characters.").required("Temporary password is required.") }), onSubmit: async (values, helpers) => {
-        try { setSaving(true); await createDaycareUser(values, token); toast.success("Login created and linked to the staff profile."); helpers.resetForm(); setRefresh((item) => item + 1); }
+    const initialValues = { staffId: "", role: "caregiver", password: "" };
+    const formik = useFormik({ initialValues, validationSchema: Yup.object({ staffId: Yup.string().required("Select a staff member."), role: Yup.string().oneOf(["manager", "caregiver", "nurse", "support"]).required(), password: Yup.string().min(8, "Use at least 8 characters.").required("Temporary password is required.") }), onSubmit: async (values, helpers) => {
+        try { setSaving(true); await createDaycareUser({ ...values, permissions: ROLE_DEFAULT_PERMISSIONS[values.role] }, token); toast.success("Login created and linked to the staff profile."); helpers.resetForm(); setRefresh((item) => item + 1); }
         catch (error) { toast.error(error.response?.data?.message || "Could not create this account."); }
         finally { setSaving(false); }
     } });
-    useEffect(() => { let active = true; Promise.all([listDaycareUsers(token), listManagementRecords("staff", { limit: 100, status: "active" }, token)]).then(([usersResult, staffResult]) => { if (!active) return; setUsers(usersResult.data.users || []); setStaffMembers((staffResult.data.records || []).filter((member) => !member.userAccount && ["manager", "caregiver"].includes(member.role))); }).catch((error) => toast.error(error.response?.data?.message || "Could not load staff accounts.")).finally(() => { if (active) { setLoading(false); setStaffLoading(false); } }); return () => { active = false; }; }, [token, refresh]);
+    useEffect(() => { let active = true; Promise.all([listDaycareUsers(token), listManagementRecords("staff", { limit: 100, status: "active" }, token)]).then(([usersResult, staffResult]) => { if (!active) return; setUsers(usersResult.data.users || []); setStaffMembers((staffResult.data.records || []).filter((member) => !member.userAccount && ["manager", "caregiver", "nurse", "support"].includes(member.role))); }).catch((error) => toast.error(error.response?.data?.message || "Could not load staff accounts.")).finally(() => { if (active) { setLoading(false); setStaffLoading(false); } }); return () => { active = false; }; }, [token, refresh]);
+    const roleTabs = [{ value: "all", label: "All" }, { value: "manager", label: "Managers" }, { value: "caregiver", label: "Caregivers" }, { value: "nurse", label: "Nurses" }, { value: "support", label: "Support" }];
     const changeUser = async (user, changes) => { try { await updateDaycareUser(user.user, changes, token); toast.success("Account updated."); setRefresh((item) => item + 1); return true; } catch (error) { toast.error(error.response?.data?.message || "Could not update account."); return false; } };
+    const removeUser = (user) => setActionModal({ title: "Delete this staff login?", description: `This permanently removes ${user.email}'s login and permissions. Their staff profile and historical activity will be kept.`, confirmLabel: "Delete login", tone: "danger", onConfirm: async () => { try { await deleteDaycareUser(user.user, token); toast.success("Staff login deleted; staff profile kept."); setActionModal(null); setRefresh((item) => item + 1); } catch (error) { toast.error(error.response?.data?.message || "Could not delete this login."); throw error; } } });
     const beginPermissions = (user) => {
         const defaults = user.role === "manager"
             ? Object.fromEntries(["dashboard", "children", "parents", "staff", "classes", "attendance", "staffAttendance", "dailyActivities", "fees", "leave", "complaints", "requests", "pickupPersons", "pickupLogs", "notifications", "announcements", "events", "documents", "activity", "reports", "settings"].map((key) => [key, key === "dashboard" || key === "reports" || key === "activity" || key === "settings" ? ["read"] : ["read", "create", "update", ...(key === "children" || key === "parents" || key === "staff" || key === "classes" || key === "dailyActivities" ? ["delete"] : [])]]))
-            : { dashboard: ["read"], children: ["read"], attendance: ["read", "create", "update"], dailyActivities: ["read", "create", "update"], pickupPersons: ["read"], pickupLogs: ["read", "create"], events: ["read"], announcements: ["read"] };
+            : ROLE_DEFAULT_PERMISSIONS[user.role] || { dashboard: ["read"] };
         setPermissionDraft(user.permissions && Object.keys(user.permissions).length ? Object.fromEntries(Object.entries(user.permissions).map(([key, value]) => [key, [...value]])) : defaults);
         setEditingPermissions(user);
     };
+    const permissionActions = ["read", "create", "update", "delete"];
+    const togglePermissionGroup = (moduleKey) => setPermissionDraft((current) => {
+        const actions = current[moduleKey] || [];
+        const isAlreadyFull = permissionActions.every((action) => actions.includes(action));
+        return { ...current, [moduleKey]: isAlreadyFull ? [] : [...permissionActions] };
+    });
+    const toggleModuleAccess = (moduleKey) => setPermissionDraft((current) => {
+        const actions = current[moduleKey] || [];
+        return { ...current, [moduleKey]: actions.includes("read") ? actions.filter((action) => action !== "read") : ["read", ...actions] };
+    });
     const togglePermission = (moduleKey, action) => setPermissionDraft((current) => {
         const actions = current[moduleKey] || [];
         return { ...current, [moduleKey]: actions.includes(action) ? actions.filter((item) => item !== action) : [...actions, action] };
     });
-    const defaults = { manager: "Children, parents, staff, classes, attendance, fees, requests, reports and center operations", caregiver: "Assigned children, attendance, daily care and pickup records" };
+    const users = roleTab === "all" ? allUsers : allUsers.filter((account) => account.role === roleTab);
+    const defaults = { manager: "Children, parents, staff, classes, attendance, fees, requests, reports and center operations", caregiver: "Assigned children, attendance, daily care and pickup records", nurse: "Children, attendance, daily care, documents, pickup records, events and announcements", support: "Dashboard access; additional permissions can be assigned by the daycare admin" };
     const fieldClass = "w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-indigo-400 focus:ring-4 focus:ring-indigo-50";
-    return <div className="space-y-5"><section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-xs font-bold uppercase tracking-wide text-indigo-600">Staff access</p><h2 className="mt-1 text-xl font-extrabold text-slate-900">Users & permissions</h2><p className="mt-1 text-sm text-slate-500">Create tenant-bound manager and caregiver sign-ins. Permissions are checked by the API on every request.</p><div className="mt-4 grid gap-3 rounded-xl bg-indigo-50 p-4 sm:grid-cols-2"><div><p className="text-sm font-bold text-indigo-900">Manager</p><p className="mt-1 text-xs leading-5 text-indigo-800">{defaults.manager}</p></div><div><p className="text-sm font-bold text-indigo-900">Caregiver</p><p className="mt-1 text-xs leading-5 text-indigo-800">{defaults.caregiver}</p></div></div></section>
-        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="border-b border-slate-100 p-5"><h3 className="font-extrabold text-slate-900">Add staff login</h3><p className="mt-1 text-sm text-slate-500">A matching staff profile is created in this daycare database.</p></div><FormikProvider value={formik}><form onSubmit={formik.handleSubmit} noValidate className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3"><label><span className="mb-1.5 block text-xs font-bold text-slate-600">Role</span><select className={fieldClass} name="role" value={formik.values.role} onChange={(event) => { formik.handleChange(event); formik.setFieldValue("staffId", ""); formik.setFieldValue("name", ""); formik.setFieldValue("email", ""); formik.setFieldValue("phone", ""); }}><option value="caregiver">Caregiver</option><option value="manager">Manager</option></select></label><label><span className={"mb-1.5 block text-xs font-bold text-slate-600"}>Full name</span><select className={fieldClass} name="staffId" value={formik.values.staffId} onChange={(event) => { const staff = staffMembers.find((member) => member._id === event.target.value); formik.setFieldValue("staffId", staff?._id || ""); formik.setFieldValue("name", staff?.fullName || ""); formik.setFieldValue("email", staff?.email || ""); formik.setFieldValue("phone", staff?.phone || ""); }}><option value="">{staffLoading ? "Loading staff..." : staffMembers.some((member) => member.role === formik.values.role) ? "Select a staff profile" : `No unlinked ${formik.values.role} profiles found`}</option>{staffMembers.filter((member) => member.role === formik.values.role).map((member) => <option key={member._id} value={member._id}>{member.fullName}</option>)}</select>{formik.touched.staffId && formik.errors.staffId && <span className="mt-1 block text-xs text-rose-600">{formik.errors.staffId}</span>}</label>{[["email", "Email", "email"], ["phone", "Phone", "tel"], ["password", "Temporary password", "password"]].map(([name, label, type]) => <label key={name}><span className="mb-1.5 block text-xs font-bold text-slate-600">{label}</span><input className={fieldClass} type={type} name={name} value={formik.values[name]} readOnly={name === "phone"} onChange={formik.handleChange} onBlur={formik.handleBlur} autoComplete="off" />{formik.touched[name] && formik.errors[name] && <span className="mt-1 block text-xs text-rose-600">{formik.errors[name]}</span>}</label>)}<div className="flex items-end"><button type="submit" disabled={saving || staffLoading || !formik.values.staffId} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-60"><Plus size={16} />{saving ? "Creating…" : "Create staff login"}</button></div></form></FormikProvider></section>
-        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="border-b border-slate-100 p-5"><h3 className="font-extrabold text-slate-900">Daycare accounts</h3><p className="mt-1 text-sm text-slate-500">These accounts are linked only to this tenant.</p></div>{loading ? <p className="p-10 text-center text-sm text-slate-500">Loading accounts…</p> : users.length ? <div className="divide-y divide-slate-100">{users.map((user) => <article key={user.user} className="flex flex-col gap-3 p-5"><div className="flex flex-col gap-3 md:flex-row md:items-center"><div className="flex min-w-0 flex-1 items-start gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500"><UserCog size={18} /></span><div className="min-w-0"><p className="truncate text-sm font-bold text-slate-800">{user.email}</p><p className="mt-0.5 text-xs capitalize text-slate-500">{user.role} · {user.lastLoginAt ? `Last login ${new Date(user.lastLoginAt).toLocaleString()}` : "Never signed in"}</p><p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">{defaults[user.role] || "Custom API permissions"}</p></div></div><div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${user.isActive ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{user.isActive ? "Active" : "Inactive"}</span><button onClick={() => beginPermissions(user)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">Permissions</button><button onClick={() => changeUser(user, { isActive: !user.isActive })} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">{user.isActive ? "Deactivate" : "Activate"}</button><button onClick={() => setActionModal({ title: "Reset temporary password", description: `Enter a new temporary password for ${user.email}. Use at least 8 characters.`, inputLabel: "New temporary password", inputPlaceholder: "At least 8 characters", inputType: "password", minLength: 8, required: true, confirmLabel: "Update password", tone: "primary", onConfirm: async (password) => { const updated = await changeUser(user, { password }); if (updated) setActionModal(null); else throw new Error("Password update failed."); } })} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">Reset password</button></div></div>{editingPermissions?.user === user.user && <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4"><div className="mb-3 flex items-center justify-between"><p className="text-sm font-bold text-slate-800">Customize module access</p><button onClick={() => setEditingPermissions(null)} className="rounded p-1 text-slate-500 hover:bg-white" aria-label="Close permissions"><X size={16} /></button></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{[...NAV.filter((item) => !["users", "overview"].includes(item.key)), { ...NAV.find((item) => item.key === "overview"), key: "dashboard" }].map((item) => <div key={item.key} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-3 py-2"><span className="text-xs font-semibold text-slate-700">{item.label}</span><div className="flex gap-2">{["read", "create", "update", "delete"].map((action) => <label key={action} title={action} className="flex items-center gap-1 text-[10px] capitalize text-slate-500"><input type="checkbox" checked={(permissionDraft[item.key] || []).includes(action)} onChange={() => togglePermission(item.key, action)} className="accent-indigo-600" />{action[0]}</label>)}</div></div>)}</div><div className="mt-3 flex justify-end"><button onClick={async () => { if (await changeUser(user, { permissions: permissionDraft })) setEditingPermissions(null); }} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700">Save permissions</button></div></div>}</article>)}</div> : <EmptyState icon={UserCog} title="No staff accounts yet" detail="Create a manager or caregiver login to delegate access." />}</section><ActionModal open={Boolean(actionModal)} {...actionModal} onClose={() => setActionModal(null)} /></div>;
+    return <div className="space-y-5"><section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><p className="text-xs font-bold uppercase tracking-wide text-indigo-600">Staff access</p><h2 className="mt-1 text-xl font-extrabold text-slate-900">Users & permissions</h2><p className="mt-1 text-sm text-slate-500">Create tenant-bound staff sign-ins. Managers and caregivers have their standard role access; nurses have role-based modules, while support permissions can be assigned here. Permissions are checked by the API on every request.</p><div className="mt-4 grid gap-3 rounded-xl bg-indigo-50 p-4 sm:grid-cols-2 xl:grid-cols-4"><div><p className="text-sm font-bold text-indigo-900">Manager</p><p className="mt-1 text-xs leading-5 text-indigo-800">{defaults.manager}</p></div><div><p className="text-sm font-bold text-indigo-900">Caregiver</p><p className="mt-1 text-xs leading-5 text-indigo-800">{defaults.caregiver}</p></div><div><p className="text-sm font-bold text-indigo-900">Nurse</p><p className="mt-1 text-xs leading-5 text-indigo-800">{defaults.nurse}</p></div><div><p className="text-sm font-bold text-indigo-900">Support</p><p className="mt-1 text-xs leading-5 text-indigo-800">{defaults.support}</p></div></div></section>
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="border-b border-slate-100 p-5"><h3 className="font-extrabold text-slate-900">Add staff login</h3><p className="mt-1 text-sm text-slate-500">Select an existing staff profile. Its name, email, and phone are reused; only a password is needed to create login access.</p></div><FormikProvider value={formik}><form onSubmit={formik.handleSubmit} noValidate className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3"><label><span className="mb-1.5 block text-xs font-bold text-slate-600">Role</span><select className={fieldClass} name="role" value={formik.values.role} onChange={(event) => { formik.handleChange(event); formik.setFieldValue("staffId", ""); }}><option value="caregiver">Caregiver</option><option value="manager">Manager</option><option value="nurse">Nurse</option><option value="support">Support</option></select></label><label><span className={"mb-1.5 block text-xs font-bold text-slate-600"}>Staff name</span><select className={fieldClass} name="staffId" value={formik.values.staffId} onChange={formik.handleChange} onBlur={formik.handleBlur}><option value="">{staffLoading ? "Loading staff..." : staffMembers.some((member) => member.role === formik.values.role) ? "Select a staff profile" : `No unlinked ${formik.values.role} profiles found`}</option>{staffMembers.filter((member) => member.role === formik.values.role).map((member) => <option key={member._id} value={member._id}>{member.fullName}</option>)}</select>{formik.touched.staffId && formik.errors.staffId && <span className="mt-1 block text-xs text-rose-600">{formik.errors.staffId}</span>}</label><label><span className="mb-1.5 block text-xs font-bold text-slate-600">Set password</span><input className={fieldClass} type="password" name="password" value={formik.values.password} onChange={formik.handleChange} onBlur={formik.handleBlur} autoComplete="new-password" placeholder="At least 8 characters" />{formik.touched.password && formik.errors.password && <span className="mt-1 block text-xs text-rose-600">{formik.errors.password}</span>}</label><div className="flex items-end"><button type="submit" disabled={saving || staffLoading || !formik.values.staffId} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-indigo-700 disabled:opacity-60"><Plus size={16} />{saving ? "Creating…" : "Create staff login"}</button></div></form></FormikProvider></section>
+        <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"><div className="border-b border-slate-100 p-5"><h3 className="font-extrabold text-slate-900">Daycare accounts</h3><p className="mt-1 text-sm text-slate-500">These accounts are linked only to this tenant.</p></div><div className="flex gap-2 overflow-x-auto border-b border-slate-100 px-5 py-3" role="tablist" aria-label="Filter staff accounts">{roleTabs.map((tab) => { const count = tab.value === "all" ? allUsers.length : allUsers.filter((account) => account.role === tab.value).length; return <button key={tab.value} type="button" role="tab" aria-selected={roleTab === tab.value} onClick={() => setRoleTab(tab.value)} className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold transition ${roleTab === tab.value ? "bg-indigo-600 text-white" : "bg-slate-50 text-slate-600 hover:bg-indigo-50 hover:text-indigo-700"}`}>{tab.label} <span className="ml-1 opacity-75">{count}</span></button>; })}</div>{loading ? <p className="p-10 text-center text-sm text-slate-500">Loading accounts…</p> : users.length ? <div className="divide-y divide-slate-100">{users.map((user) => <article key={user.user} className="flex flex-col gap-3 p-5"><div className="flex flex-col gap-3 md:flex-row md:items-center"><div className="flex min-w-0 flex-1 items-start gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-slate-100 text-slate-500"><UserCog size={18} /></span><div className="min-w-0"><p className="truncate text-sm font-bold text-slate-800">{user.email}</p><p className="mt-0.5 text-xs capitalize text-slate-500">{user.role} · {user.lastLoginAt ? `Last login ${new Date(user.lastLoginAt).toLocaleString()}` : "Never signed in"}</p><p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">{defaults[user.role] || "Custom API permissions"}</p></div></div><div className="flex flex-wrap items-center gap-2"><span className={`rounded-full px-2.5 py-1 text-xs font-bold ${user.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>{user.isActive ? "Active" : "Inactive"}</span><button onClick={() => beginPermissions(user)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">Permissions</button><button onClick={() => changeUser(user, { isActive: !user.isActive })} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">{user.isActive ? "Deactivate" : "Activate"}</button><button onClick={() => setActionModal({ title: "Reset temporary password", description: `Enter a new temporary password for ${user.email}. Use at least 8 characters.`, inputLabel: "New temporary password", inputPlaceholder: "At least 8 characters", inputType: "password", minLength: 8, required: true, confirmLabel: "Update password", tone: "primary", onConfirm: async (password) => { const updated = await changeUser(user, { password }); if (updated) setActionModal(null); else throw new Error("Password update failed."); } })} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-50">Reset password</button><button onClick={() => removeUser(user)} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"><Trash2 size={14} />Delete</button></div></div>{editingPermissions?.user === user.user && <div className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4"><div className="mb-3 flex items-center justify-between"><p className="text-sm font-bold text-slate-800">Customize module access</p><button onClick={() => setEditingPermissions(null)} className="rounded p-1 text-slate-500 hover:bg-white" aria-label="Close permissions"><X size={16} /></button></div><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{[...NAV.filter((item) => !["users", "overview"].includes(item.key)), { ...NAV.find((item) => item.key === "overview"), key: "dashboard" }].map((item) => <div key={item.key} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-3 py-2"><span className="text-xs font-semibold text-slate-700">{item.label}</span><div className="flex gap-2"><label title="Select all permissions for this module" className="flex items-center gap-1 text-[10px] font-bold text-indigo-600"><input type="checkbox" aria-label={`F: select all ${item.label} permissions`} checked={permissionActions.every((action) => (permissionDraft[item.key] || []).includes(action))} onChange={() => togglePermissionGroup(item.key)} className="accent-indigo-600" />F</label><label title="Module access (read)" className="flex items-center gap-1 text-[10px] font-bold text-emerald-700"><input type="checkbox" aria-label={`A: enable ${item.label} module access`} checked={(permissionDraft[item.key] || []).includes("read")} onChange={() => toggleModuleAccess(item.key)} className="accent-emerald-600" />A</label>{["read", "create", "update", "delete"].map((action) => <label key={action} title={action} className="flex items-center gap-1 text-[10px] capitalize text-slate-500"><input type="checkbox" checked={(permissionDraft[item.key] || []).includes(action)} onChange={() => togglePermission(item.key, action)} className="accent-indigo-600" />{action[0]}</label>)}</div></div>)}</div><div className="mt-3 flex justify-end"><button onClick={async () => { if (await changeUser(user, { permissions: permissionDraft })) setEditingPermissions(null); }} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700">Save permissions</button></div></div>}</article>)}</div> : <EmptyState icon={UserCog} title="No staff accounts yet" detail="Add an active staff profile with a valid email and phone, then create a login above." />}</section><ActionModal open={Boolean(actionModal)} {...actionModal} onClose={() => setActionModal(null)} /></div>;
 };
 
 export default DaycareManagementDashboard;

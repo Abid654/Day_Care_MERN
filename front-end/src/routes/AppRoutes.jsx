@@ -7,6 +7,7 @@ import Register from "../pages/Register";
 const ParentDashboard = lazy(() => import("../pages/ParentDashboard"));
 const DaycareDashboard = lazy(() => import("../pages/DaycareDashboard"));
 const DaycareManagementDashboard = lazy(() => import("../pages/DaycareManagementDashboard"));
+const DaycareAdminProfile = lazy(() => import("../pages/DaycareAdminProfile"));
 const AdminDashboard = lazy(() => import("../pages/AdminDashboard"));
 const DaycareProfilePage = lazy(() => import("../pages/DaycareProfilePage"));
 
@@ -25,8 +26,11 @@ const AppRoutes = () => {
         <Route path="/register" element={<Register />} />
         <Route path="/parent/dashboard" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><ParentDashboard /></Suspense></ProtectedRoute>} />
         <Route path="/daycares/:daycareId" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><DaycareProfilePage /></Suspense></ProtectedRoute>} />
-        <Route path="/daycare/dashboard" element={<ProtectedRoute roles={["daycare", "manager", "caregiver"]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />
-        <Route path="/daycare/dashboard/:module" element={<ProtectedRoute roles={["daycare", "manager", "caregiver"]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />
+        <Route path="/daycare/dashboard" element={<ProtectedRoute roles={["daycare", "manager", "caregiver", "nurse", "support"]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />
+        <Route path="/daycare/dashboard/:module" element={<ProtectedRoute roles={["daycare", "manager", "caregiver", "nurse", "support"]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />
+        {["manager", "caregiver", "nurse", "support"].map((role) => <Route key={role} path={`/daycare/${role}/dashboard`} element={<ProtectedRoute roles={[role]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />)}
+        {["manager", "caregiver", "nurse", "support"].map((role) => <Route key={`${role}-module`} path={`/daycare/${role}/dashboard/:module`} element={<ProtectedRoute roles={[role]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />)}
+        <Route path="/daycare/profile" element={<ProtectedRoute roles={["daycare", "manager", "caregiver", "nurse", "support"]}><Suspense fallback={<RouteLoading />}><DaycareAdminProfile /></Suspense></ProtectedRoute>} />
         <Route path="/daycare/profile/setup" element={<ProtectedRoute roles={["daycare"]}><Suspense fallback={<RouteLoading />}><DaycareDashboard /></Suspense></ProtectedRoute>} />
       </Routes>
     </BrowserRouter>

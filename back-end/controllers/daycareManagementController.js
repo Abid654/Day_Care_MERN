@@ -64,14 +64,22 @@ async function listUsers(req, res) {
 }
 
 async function createUser(req, res) {
-  const { email, password, role, staffId } = req.body || {};
-  const cleanEmail = typeof email === "string" ? email.trim().toLowerCase() : "";
-  if (!validId(staffId) || !cleanEmail || !/^\S+@\S+\.\S+$/.test(cleanEmail) || typeof password !== "string" || password.length < 8 || !["manager", "caregiver"].includes(role)) {
-    return res.status(400).json({ success: false, message: "Select an active staff member and enter a valid email and password of at least 8 characters" });
+  const { password, role, staffId } = req.body || {};
+  if (!validId(staffId) || typeof password !== "string" || password.length < 8 || !["manager", "caregiver", "nurse", "support"].includes(role)) {
+    return res.status(400).json({ success: false, message: "Select an active staff member and set a password of at least 8 characters" });
   }
   try {
+    const [activeUserCount, tenant] = await Promise.all([
+      req.mainModels.TenantMembership.countDocuments({ tenant: req.tenant._id, isActive: true }),
+      req.mainModels.Tenant.findById(req.tenant._id).select("userLimit").lean(),
+    ]);
+    const userLimit = Math.max(10, Number(tenant?.userLimit) || 10);
+    if (activeUserCount >= userLimit) return res.status(403).json({ success: false, message: `This daycare has reached its limit of ${userLimit} staff logins. Ask the Super Admin to increase the allowance.` });
     const staff = await req.models.Staff.findOne({ _id: staffId, role, status: "active", userAccount: { $in: [null] } });
     if (!staff) return res.status(409).json({ success: false, message: "This staff member is unavailable or already has a login" });
+    const cleanEmail = typeof staff.email === "string" ? staff.email.trim().toLowerCase() : "";
+    if (!cleanEmail || !/^\S+@\S+\.\S+$/.test(cleanEmail)) return res.status(400).json({ success: false, message: "Add a valid email to this staff profile before creating login access" });
+    if (!staff.phone?.trim()) return res.status(400).json({ success: false, message: "Add a phone number to this staff profile before creating login access" });
     if (await req.mainModels.User.exists({ email: cleanEmail }) || await req.mainModels.TenantMembership.exists({ email: cleanEmail }) || await req.mainModels.Tenant.exists({ ownerEmail: cleanEmail })) return res.status(409).json({ success: false, message: "This email is already in use" });
     const userId = new mongoose.Types.ObjectId();
     const user = await req.models.User.create({ _id: userId, name: staff.fullName, email: cleanEmail, phone: staff.phone, password: await bcrypt.hash(password, 10), role });
@@ -115,6 +123,23 @@ async function updateUser(req, res) {
   return res.json({ success: true, user: membership.toObject() });
 }
 
+async function deleteUser(req, res) {
+  if (!validId(req.params.userId)) return res.status(400).json({ success: false, message: "Invalid user id" });
+  try {
+    const membership = await req.mainModels.TenantMembership.findOne({ tenant: req.tenant._id, user: req.params.userId });
+    if (!membership) return res.status(404).json({ success: false, message: "Staff login not found" });
+    const otherMembership = await req.mainModels.TenantMembership.exists({ user: membership.user, _id: { $ne: membership._id } });
+    if (otherMembership) return res.status(409).json({ success: false, message: "This login is linked to another daycare and cannot be deleted here" });
+    await writeAudit(req, "deleted", "users", membership.user, { role: membership.role, email: membership.email });
+    await req.models.User.deleteOne({ _id: membership.user, role: membership.role });
+    await req.models.Staff.updateMany({ userAccount: membership.user }, { $unset: { userAccount: 1 } });
+    await req.mainModels.TenantMembership.deleteOne({ _id: membership._id, tenant: req.tenant._id });
+    return res.json({ success: true, message: "Staff login deleted; staff profile kept" });
+  } catch (error) {
+    console.error("Daycare staff login delete failed:", error.message);
+    return res.status(503).json({ success: false, message: "Staff login could not be deleted" });
+  }
+}
 async function resetParentPassword(req, res) {
   if (!validId(req.params.parentId)) return res.status(400).json({ success: false, message: "Invalid parent id" });
   try {
@@ -196,8 +221,9 @@ async function listRecords(req, res) {
   if (!config) return;
   const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
   const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 20));
-  const scope = await caregiverScope(req, req.params.module);
-  const filter = scope ? { $and: [scope] } : {};
+  const isActivityLog = req.params.module === "activity";
+  const scope = isActivityLog ? null : await caregiverScope(req, req.params.module);
+  const filter = isActivityLog ? { user: req.user.userId } : scope ? { $and: [scope] } : {};
   if (req.query.status && req.query.status !== "all") filter.status = req.query.status;
   if (req.query.category && config.fields.includes("category")) filter.category = String(req.query.category).slice(0, 40);
   if (req.query.from || req.query.to) {
@@ -703,7 +729,7 @@ async function getOverview(req, res) {
       Complaint.countDocuments({ status: "pending" }), ParentRequest.countDocuments({ status: "pending" }), DaycareEvent.countDocuments({ date: { $gte: now }, status: "scheduled" }),
       Attendance.countDocuments({ checkIn: { $gte: dayStart, $lte: dayEnd } }), Attendance.countDocuments({ checkOut: { $gte: dayStart, $lte: dayEnd } }),
       StaffAttendance.countDocuments({ checkIn: { $gte: dayStart, $lte: dayEnd } }), StaffAttendance.countDocuments({ checkOut: { $gte: dayStart, $lte: dayEnd } }),
-      AuditLog.find({}).sort({ createdAt: -1 }).limit(10).lean(), DaycareSettings.findOne({}).lean(),
+      AuditLog.find({ user: req.user.userId }).sort({ createdAt: -1 }).limit(10).lean(), DaycareSettings.findOne({}).lean(),
     ]);
     const chartStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
     const [enrollment, attendanceByMonth, feeByMonth, complaintStatuses, staffAttendanceByMonth, feeStatuses] = await Promise.all([
@@ -748,4 +774,92 @@ async function changePassword(req, res) {
   }
 }
 
-module.exports = { listRecords, createRecord, updateRecord, deleteRecord, getOverview, getSettings, saveSettings, listUsers, createUser, updateUser, resetParentPassword, logLogout, uploadDocument, downloadDocument, uploadProfilePhoto, getProfilePhoto, recordFeePayment, changePassword };
+async function getAccountProfile(req, res) {
+  try {
+    const user = await req.models.User.findOne({ _id: req.user.userId, isActive: true }).select("name email phone profilePhoto role isActive").lean();
+    if (!user) return res.status(404).json({ success: false, message: "Account not found" });
+    return res.json({ success: true, user });
+  } catch (error) {
+    console.error("Daycare account profile read failed:", error.message);
+    return res.status(503).json({ success: false, message: "Account profile could not be loaded" });
+  }
+}
+
+async function updateAccountProfile(req, res) {
+  const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  if (name.length < 2 || name.length > 50) return res.status(400).json({ success: false, message: "Name must be between 2 and 50 characters" });
+  if (!phone || phone.length > 30) return res.status(400).json({ success: false, message: "Enter a valid phone number" });
+  try {
+    const user = await req.models.User.findOne({ _id: req.user.userId, isActive: true }).select("name email phone profilePhoto role isActive");
+    if (!user) return res.status(404).json({ success: false, message: "Account not found" });
+    user.name = name;
+    user.phone = phone;
+    await user.save();
+    await writeAudit(req, "updated", "account-profile", user._id, { changedFields: ["name", "phone"] });
+    return res.json({ success: true, user: { name: user.name, email: user.email, phone: user.phone, profilePhoto: user.profilePhoto || "", role: user.role, isActive: user.isActive } });
+  } catch (error) {
+    if (error.name === "ValidationError" || error.name === "CastError") return res.status(400).json({ success: false, message: error.message });
+    console.error("Daycare account profile update failed:", error.message);
+    return res.status(503).json({ success: false, message: "Account profile could not be updated" });
+  }
+}
+
+const accountPhotoDirectory = (tenantId) => path.join(__dirname, "..", "private_uploads", "daycare", String(tenantId), "account_photos");
+
+async function uploadAccountPhoto(req, res) {
+  const contentType = req.headers["content-type"]?.split(";")[0].trim().toLowerCase();
+  const type = PROFILE_IMAGE_TYPES[contentType];
+  if (!Buffer.isBuffer(req.body) || !req.body.length || req.body.length > 3 * 1024 * 1024 || !type || !type.valid(req.body)) return res.status(400).json({ success: false, message: "Upload a valid JPG, PNG, or WebP image up to 3 MB" });
+  try {
+    const user = await req.models.User.findOne({ _id: req.user.userId, isActive: true }).select("profilePhoto");
+    if (!user) return res.status(404).json({ success: false, message: "Account not found" });
+    const storageKey = `${randomUUID()}${type.extension}`;
+    const directory = accountPhotoDirectory(req.tenant._id);
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(path.join(directory, storageKey), req.body, { flag: "wx", mode: 0o600 });
+    const previousKey = typeof user.profilePhoto === "string" && user.profilePhoto.startsWith("private:") ? user.profilePhoto.slice("private:".length) : "";
+    user.profilePhoto = `private:${storageKey}`;
+    await user.save();
+    if (/^[a-f0-9-]{36}\.(jpg|png|webp)$/.test(previousKey)) await fs.unlink(path.join(directory, previousKey)).catch(() => {});
+    await writeAudit(req, "updated", "account-profile", user._id, { changedFields: ["profilePhoto"] });
+    return res.json({ success: true, profilePhoto: user.profilePhoto });
+  } catch (error) {
+    console.error("Daycare account photo upload failed:", error.message);
+    return res.status(503).json({ success: false, message: "Profile photo could not be uploaded" });
+  }
+}
+
+async function getAccountPhoto(req, res) {
+  try {
+    const user = await req.models.User.findOne({ _id: req.user.userId, isActive: true }).select("profilePhoto").lean();
+    const storageKey = typeof user?.profilePhoto === "string" && user.profilePhoto.startsWith("private:") ? user.profilePhoto.slice("private:".length) : "";
+    const match = storageKey.match(/^([a-f0-9-]{36})\.(jpg|png|webp)$/);
+    if (!match) return res.status(404).json({ success: false, message: "Profile photo not found" });
+    const mimeType = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" }[match[2]];
+    const filePath = path.join(accountPhotoDirectory(req.tenant._id), storageKey);
+    res.set({ "Content-Type": mimeType, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store" });
+    return res.sendFile(filePath, (error) => { if (error && !res.headersSent) res.status(error.code === "ENOENT" ? 404 : 500).json({ success: false, message: "Profile photo is unavailable" }); });
+  } catch (error) {
+    console.error("Daycare account photo read failed:", error.message);
+    return res.status(503).json({ success: false, message: "Profile photo could not be loaded" });
+  }
+}
+
+async function deleteAccountPhoto(req, res) {
+  try {
+    const user = await req.models.User.findOne({ _id: req.user.userId, isActive: true }).select("profilePhoto");
+    if (!user) return res.status(404).json({ success: false, message: "Account not found" });
+    const storageKey = typeof user.profilePhoto === "string" && user.profilePhoto.startsWith("private:") ? user.profilePhoto.slice("private:".length) : "";
+    user.profilePhoto = undefined;
+    await user.save();
+    if (/^[a-f0-9-]{36}\.(jpg|png|webp)$/.test(storageKey)) await fs.unlink(path.join(accountPhotoDirectory(req.tenant._id), storageKey)).catch(() => {});
+    await writeAudit(req, "updated", "account-profile", user._id, { changedFields: ["profilePhoto"] });
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("Daycare account photo delete failed:", error.message);
+    return res.status(503).json({ success: false, message: "Profile photo could not be removed" });
+  }
+}
+
+module.exports = { listRecords, createRecord, updateRecord, deleteRecord, getOverview, getSettings, saveSettings, listUsers, createUser, updateUser, deleteUser, resetParentPassword, logLogout, uploadDocument, downloadDocument, uploadProfilePhoto, getProfilePhoto, recordFeePayment, changePassword, getAccountProfile, updateAccountProfile, uploadAccountPhoto, getAccountPhoto, deleteAccountPhoto };

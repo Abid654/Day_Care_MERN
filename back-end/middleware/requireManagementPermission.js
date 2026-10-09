@@ -4,6 +4,8 @@ const ROLE_DEFAULTS = {
     attendance: ["read", "create", "update"], staffAttendance: ["read", "create", "update"], dailyActivities: ["read", "create", "update", "delete"], fees: ["read", "create", "update"], leave: ["read", "create", "update"], complaints: ["read", "create", "update"], requests: ["read", "update"], pickupPersons: ["read", "create", "update"], pickupLogs: ["read", "create"], notifications: ["read", "create"], announcements: ["read", "create", "update"], events: ["read", "create", "update"], documents: ["read", "create", "update"], reports: ["read"], activity: ["read"], settings: ["read"],
   },
   caregiver: { dashboard: ["read"], children: ["read"], attendance: ["read", "create", "update"], dailyActivities: ["read", "create", "update"], pickupPersons: ["read"], pickupLogs: ["read", "create"], events: ["read"], announcements: ["read"] },
+  nurse: { dashboard: ["read"], children: ["read"], attendance: ["read", "create", "update"], dailyActivities: ["read", "create", "update"], pickupPersons: ["read"], pickupLogs: ["read"], documents: ["read"], events: ["read"], announcements: ["read"] },
+  support: { dashboard: ["read"] },
 };
 
 function requireManagementPermission(action) {

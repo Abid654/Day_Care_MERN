@@ -9,6 +9,10 @@ router.get("/overview", daycareController.getAdminOverview);
 router.get("/records/:module", daycareController.listAdminRecords);
 router.get("/daycares", daycareController.listAdminDaycares);
 router.get("/daycares/:tenantId", daycareController.getAdminDaycare);
+router.get("/daycares/:tenantId/users", daycareController.listAdminDaycareUsers);
+router.get("/daycares/:tenantId/activity-logs", daycareController.listAdminDaycareActivityLogs);
+router.patch("/daycares/:tenantId/user-limit", daycareController.updateAdminDaycareUserLimit);
+router.patch("/daycares/:tenantId/users/:userId", daycareController.updateAdminDaycareUser);
 router.patch("/daycares/:tenantId/review", daycareController.reviewDaycare);
 router.patch("/daycares/:tenantId/status", daycareController.changeAdminDaycareStatus);
 

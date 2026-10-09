@@ -3,7 +3,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useDispatch } from "react-redux";
 import { toast } from "react-toastify";
 import { getAssetUrl } from "../api/client";
-import { changeAdminDaycareStatus, getAdminDaycares, getAdminOverview, getAdminRecords, reviewDaycare } from "../api/adminApi";
+import { changeAdminDaycareStatus, getAdminDaycares, getAdminOverview, getAdminRecords, getAdminDaycareUsers, getAdminDaycareActivityLogs, updateAdminDaycareUserLimit, updateAdminDaycareUser, reviewDaycare } from "../api/adminApi";
 import { Activity, Building2, CalendarDays, CheckCircle2, CircleAlert, Clock3, CreditCard, Eye, FileText, LogOut, MapPin, Menu, MessageSquareWarning, Search, ShieldCheck, Star, UserCog, Users, XCircle } from "lucide-react";
 import { clearCredentials } from "../redux/slices/authSlice";
 import ActionModal from "../components/ActionModal";
@@ -19,7 +19,7 @@ const DAYCARE_STATUS_TABS = [
     { value: "suspended", label: "Suspended" },
     { value: "inactive", label: "Deactivated" },
 ];
-const MODULE_TITLES = { parents: "Parents", children: "Children", bookings: "Bookings", payments: "Payments", complaints: "Complaints", reviews: "Reviews & ratings", "activity-logs": "Activity logs", users: "Platform users" };
+const MODULE_TITLES = { parents: "Parents", children: "Children", bookings: "Bookings", payments: "Payments", complaints: "Complaints", reviews: "Reviews & ratings", "activity-logs": "Activity logs", users: "Daycare admin accounts" };
 const MODULE_COLUMNS = {
     parents: [["name", "Parent"], ["email", "Email"], ["phone", "Phone"], ["childrenCount", "Children"], ["daycareLabels", "Daycare(s)"], ["statusLabel", "Status"], ["createdAt", "Registered"]],
     children: [["name", "Child"], ["parent", "Parent"], ["daycare", "Daycare"], ["className", "Class"], ["gender", "Gender"], ["enrollmentDate", "Enrolled"], ["status", "Status"]],
@@ -27,10 +27,10 @@ const MODULE_COLUMNS = {
     payments: [["transactionId", "Transaction"], ["parent", "Parent"], ["child", "Child"], ["daycare", "Daycare"], ["amountLabel", "Amount"], ["method", "Method"], ["date", "Date"], ["status", "Status"]],
     complaints: [["complaintNumber", "Complaint"], ["parent", "Parent"], ["child", "Child"], ["daycare", "Daycare"], ["subject", "Subject"], ["priority", "Priority"], ["status", "Status"], ["createdAt", "Date"]],
     reviews: [["parent", "Parent"], ["daycare", "Daycare"], ["ratingLabel", "Rating"], ["comment", "Review"], ["createdAt", "Date"]],
-    "activity-logs": [["user", "User"], ["role", "Role"], ["action", "Action"], ["module", "Module"], ["daycare", "Daycare"], ["ipAddress", "IP address"], ["createdAt", "Time"]],
-    users: [["name", "Name"], ["email", "Email"], ["role", "Role"], ["daycare", "Daycare"], ["statusLabel", "Status"], ["createdAt", "Created"]],
+    "activity-logs": [["daycareAdmin", "Daycare admin"], ["daycare", "Daycare name"], ["activityCountLabel", "Activity entries"], ["createdAt", "Latest activity"]],
+    users: [["name", "Daycare admin"], ["daycare", "Daycare name"], ["email", "Email"], ["role", "Role"], ["userCountLabel", "Active staff users"], ["userLimitLabel", "Allowed users"], ["statusLabel", "Status"], ["createdAt", "Created"]],
 };
-const statusClass = (status) => ({ approved: "bg-emerald-50 text-emerald-700", pending: "bg-amber-50 text-amber-700", "needs-info": "bg-sky-50 text-sky-700", rejected: "bg-rose-50 text-rose-700", suspended: "bg-rose-50 text-rose-700", inactive: "bg-slate-100 text-slate-600" }[status] || "bg-slate-100 text-slate-600");
+const statusClass = (status) => ({ active: "bg-emerald-50 text-emerald-700", approved: "bg-emerald-50 text-emerald-700", pending: "bg-amber-50 text-amber-700", "needs-info": "bg-sky-50 text-sky-700", rejected: "bg-rose-50 text-rose-700", suspended: "bg-rose-50 text-rose-700", inactive: "bg-rose-50 text-rose-700" }[status] || "bg-slate-100 text-slate-600");
 
 const AdminDashboard = () => {
     const navigate = useNavigate();
@@ -70,6 +70,9 @@ const AdminDashboard = () => {
     const [recordFrom, setRecordFrom] = useState("");
     const [recordTo, setRecordTo] = useState("");
     const [recordDaycares, setRecordDaycares] = useState([]);
+    const [recordRefresh, setRecordRefresh] = useState(0);
+    const [userDetailDaycare, setUserDetailDaycare] = useState(null);
+    const [activityDetailDaycare, setActivityDetailDaycare] = useState(null);
 
     const loadDaycares = useCallback(async () => {
         if (!token || user?.role !== "admin") return;
@@ -97,7 +100,7 @@ const AdminDashboard = () => {
             .catch((requestError) => { if (active) setRecordError(requestError.response?.data?.message || "Platform records could not be loaded."); })
             .finally(() => { if (active) setRecordLoading(false); });
         return () => { active = false; };
-    }, [platformModule, recordDaycare, recordFrom, recordPage, recordSearch, recordStatus, recordTo, token, user]);
+    }, [platformModule, recordDaycare, recordFrom, recordPage, recordRefresh, recordSearch, recordStatus, recordTo, token, user]);
 
     const logout = () => { localStorage.removeItem("token"); localStorage.removeItem("user"); dispatch(clearCredentials()); navigate("/admin", { replace: true }); };
     const setStatusFilter = (status) => { setSearchParams(status === "all" ? {} : { status }); setPage(1); setSidebarOpen(false); };
@@ -129,6 +132,9 @@ const AdminDashboard = () => {
         parent: item.parent || item.parentName || "",
         daycareLabels: (item.daycares || []).map((daycare) => daycare.name).join(", ") || item.daycare || "",
         statusLabel: item.isActive === false ? "inactive" : item.status || "active",
+        userCountLabel: item.role === "daycare admin" ? String(item.userCount || 0) : "—",
+        userLimitLabel: item.role === "daycare admin" ? String(item.userLimit || 10) : "—",
+        activityCountLabel: platformModule === "activity-logs" ? String(item.activityCount || 0) : item.activityCountLabel,
         amountLabel: `Rs. ${Number(item.amount || 0).toLocaleString()}`,
         ratingLabel: `${item.rating || 0} / 5`,
         createdAt: item.createdAt || item.date || item.enrollmentDate || "",
@@ -203,10 +209,12 @@ const AdminDashboard = () => {
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-sm text-slate-500"><span>{visibleDaycares.length ? `${(page - 1) * PAGE_SIZE + 1}-${Math.min(page * PAGE_SIZE, visibleDaycares.length)} of ${visibleDaycares.length}` : "0 results"}</span><div className="flex gap-2"><button disabled={page <= 1} onClick={() => setPage((value) => value - 1)} className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold disabled:opacity-40">Previous</button><span className="px-2 py-1.5">{page} / {pageCount}</span><button disabled={page >= pageCount} onClick={() => setPage((value) => value + 1)} className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold disabled:opacity-40">Next</button></div></div>
                 </section>
                 </>}
-                {platformModule && <PlatformRecords module={platformModule} title={MODULE_TITLES[platformModule]} records={displayRecords} daycares={recordDaycares} loading={recordLoading} error={recordError} page={recordPage} pages={recordPages} total={recordTotal} search={recordSearch} status={recordStatus} daycare={recordDaycare} from={recordFrom} to={recordTo} onSearch={(value) => { setRecordSearch(value); setRecordPage(1); }} onStatus={(value) => { setRecordStatus(value); setRecordPage(1); }} onDaycare={(value) => { setRecordDaycare(value); setRecordPage(1); }} onFrom={(value) => { setRecordFrom(value); setRecordPage(1); }} onTo={(value) => { setRecordTo(value); setRecordPage(1); }} onPage={setRecordPage} />}
+                {platformModule && <PlatformRecords module={platformModule} title={MODULE_TITLES[platformModule]} records={displayRecords} daycares={recordDaycares} loading={recordLoading} error={recordError} page={recordPage} pages={recordPages} total={recordTotal} search={recordSearch} status={recordStatus} daycare={recordDaycare} from={recordFrom} to={recordTo} onSearch={(value) => { setRecordSearch(value); setRecordPage(1); }} onStatus={(value) => { setRecordStatus(value); setRecordPage(1); }} onDaycare={(value) => { setRecordDaycare(value); setRecordPage(1); }} onFrom={(value) => { setRecordFrom(value); setRecordPage(1); }} onTo={(value) => { setRecordTo(value); setRecordPage(1); }} onPage={setRecordPage} onManageDaycare={setUserDetailDaycare} onManageActivity={setActivityDetailDaycare} onDataChanged={() => setRecordRefresh((value) => value + 1)} />}
                 {!platformModule && !isOverview && !isDaycareList && !isReports && <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center"><p className="font-bold text-slate-800">This Super Admin module is not connected yet.</p><p className="mt-1 text-sm text-slate-500">No backend endpoint is available for this screen.</p></div>}
             </main>
         </div>
+        {userDetailDaycare && <DaycareUsersModal daycare={userDetailDaycare} token={token} onClose={() => setUserDetailDaycare(null)} onDataChanged={() => setRecordRefresh((value) => value + 1)} />}
+        {activityDetailDaycare && <DaycareActivityLogsModal daycare={activityDetailDaycare} token={token} onClose={() => setActivityDetailDaycare(null)} />}
         <ActionModal open={Boolean(actionModal)} {...actionModal} onClose={() => setActionModal(null)} />
     </div>;
 };
@@ -219,7 +227,7 @@ const ReportsPanel = ({ overview }) => <div className="space-y-5">
     <p className="text-xs text-slate-500">Yeh report connected tenant databases aur platform account records se load hoti hai.</p>
 </div>;
 
-const PlatformRecords = ({ module, title, records, daycares, loading, error, page, pages, total, search, status, daycare, from, to, onSearch, onStatus, onDaycare, onFrom, onTo, onPage }) => {
+const PlatformRecords = ({ module, title, records, daycares, loading, error, page, pages, total, search, status, daycare, from, to, onSearch, onStatus, onDaycare, onFrom, onTo, onPage, onManageDaycare, onManageActivity, onDataChanged }) => {
     const columns = MODULE_COLUMNS[module] || [];
     const statuses = [...new Set([...records.map((record) => record.status || (record.isActive === false ? "inactive" : "active")).filter(Boolean), ...(module === "bookings" ? ["pending", "accepted", "completed", "cancelled", "rejected"] : module === "payments" ? ["pending", "paid", "failed", "refunded"] : module === "complaints" ? ["pending", "in-progress", "resolved", "rejected"] : module === "parents" || module === "users" ? ["active", "inactive"] : [])])];
     const valueFor = (record, key) => {
@@ -239,9 +247,116 @@ const PlatformRecords = ({ module, title, records, daycares, loading, error, pag
             <input aria-label="From date" type="date" value={from} onClick={openNativePicker} onChange={(event) => onFrom(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
             <input aria-label="To date" type="date" value={to} onClick={openNativePicker} onChange={(event) => onTo(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
         </div>
-        {loading ? <div className="animate-pulse space-y-3 p-6"><div className="h-10 rounded bg-slate-100" /><div className="h-16 rounded bg-slate-100" /><div className="h-16 rounded bg-slate-100" /></div> : error ? <div role="alert" className="p-10 text-center"><p className="font-bold text-rose-700">Records unavailable</p><p className="mt-1 text-sm text-slate-500">{error}</p></div> : !records.length ? <div className="p-12 text-center text-sm text-slate-500">No matching records found.</div> : <div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-100 text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>{columns.map(([key, label]) => <th key={key} className="whitespace-nowrap px-4 py-3 font-bold">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{records.map((record) => <tr key={record.id} className="hover:bg-slate-50">{columns.map(([key]) => <td key={key} className="max-w-72 px-4 py-3 text-slate-700"><span className={key.toLowerCase().includes("status") || key === "status" ? `inline-flex rounded-full px-2.5 py-1 text-xs font-bold capitalize ${statusClass(String(record[key] || "").toLowerCase())}` : ""}>{valueFor(record, key)}</span></td>)}</tr>)}</tbody></table></div>}
+        {loading ? <div className="animate-pulse space-y-3 p-6"><div className="h-10 rounded bg-slate-100" /><div className="h-16 rounded bg-slate-100" /><div className="h-16 rounded bg-slate-100" /></div> : error ? <div role="alert" className="p-10 text-center"><p className="font-bold text-rose-700">Records unavailable</p><p className="mt-1 text-sm text-slate-500">{error}</p></div> : !records.length ? <div className="p-12 text-center text-sm text-slate-500">No matching records found.</div> : <div className="overflow-x-auto"><table className="min-w-full divide-y divide-slate-100 text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>{columns.map(([key, label]) => <th key={key} className="whitespace-nowrap px-4 py-3 font-bold">{label}</th>)}{["users", "activity-logs"].includes(module) && <th className="whitespace-nowrap px-4 py-3 font-bold">Details</th>}</tr></thead><tbody className="divide-y divide-slate-100">{records.map((record) => <tr key={record.id} className="hover:bg-slate-50">{columns.map(([key]) => <td key={key} className="max-w-72 px-4 py-3 text-slate-700"><span className={key.toLowerCase().includes("status") || key === "status" ? `inline-flex rounded-full px-2.5 py-1 text-xs font-bold capitalize ${statusClass(String(record[key] || "").toLowerCase())}` : ""}>{valueFor(record, key)}</span></td>)}{["users", "activity-logs"].includes(module) && <td className="px-4 py-3">{module === "users" ? record.role === "daycare admin" && <button onClick={() => onManageDaycare(record)} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-indigo-700">Details</button> : <button onClick={() => onManageActivity(record)} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-indigo-700">View logs</button>}</td>}</tr>)}</tbody></table></div>}
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-4 py-3 text-sm text-slate-500"><span>{total ? `${(page - 1) * 25 + 1}-${Math.min(page * 25, total)} of ${total}` : "0 results"}</span><div className="flex items-center gap-2"><button disabled={page <= 1 || loading} onClick={() => onPage(page - 1)} className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold disabled:opacity-40">Previous</button><span>{page} / {Math.max(1, pages)}</span><button disabled={page >= pages || loading} onClick={() => onPage(page + 1)} className="rounded-lg border border-slate-200 px-3 py-1.5 font-semibold disabled:opacity-40">Next</button></div></div>
     </section>;
+};
+
+const DaycareActivityLogsModal = ({ daycare, token, onClose }) => {
+    const [logs, setLogs] = useState([]);
+    const [page, setPage] = useState(1);
+    const [pages, setPages] = useState(1);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState("");
+
+    useEffect(() => {
+        let active = true;
+        setLoading(true); setError("");
+        getAdminDaycareActivityLogs(daycare.daycareId, { page, limit: 50 }, token).then(({ data }) => {
+            if (!active) return;
+            setLogs(data.logs || []);
+            setPages(data.pagination?.pages || 1);
+        }).catch((requestError) => { if (active) setError(requestError.response?.data?.message || "Activity logs could not be loaded."); })
+            .finally(() => { if (active) setLoading(false); });
+        return () => { active = false; };
+    }, [daycare.daycareId, page, token]);
+
+    return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section role="dialog" aria-modal="true" aria-labelledby="daycare-activity-title" className="flex max-h-[92dvh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <header className="flex items-start justify-between border-b border-slate-100 px-5 py-4 sm:px-7"><div><p className="text-xs font-bold uppercase tracking-wide text-indigo-600">Super Admin · Activity logs</p><h2 id="daycare-activity-title" className="mt-1 text-xl font-extrabold text-slate-900">{daycare.daycare} activity</h2><p className="mt-1 text-sm text-slate-500">These entries belong only to this daycare.</p></div><button onClick={onClose} aria-label="Close activity logs" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><XCircle size={19} /></button></header>
+        <div className="min-h-0 flex-1 overflow-auto p-5 sm:p-7">{loading ? <p className="p-10 text-center text-sm text-slate-500">Loading activity logs…</p> : error ? <p role="alert" className="p-10 text-center text-sm text-rose-600">{error}</p> : logs.length ? <div className="overflow-x-auto rounded-xl border border-slate-100"><table className="min-w-full text-left text-sm"><thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>{[["user", "User"], ["role", "Role"], ["action", "Action"], ["module", "Module"], ["record", "Record"], ["ipAddress", "IP address"], ["createdAt", "Time"]].map(([key, label]) => <th key={key} className="whitespace-nowrap px-4 py-3 font-bold">{label}</th>)}</tr></thead><tbody className="divide-y divide-slate-100">{logs.map((log) => <tr key={log.id} className="hover:bg-slate-50"><td className="px-4 py-3"><span className="block font-semibold text-slate-800">{log.user}</span><span className="text-xs text-slate-500">{log.email}</span></td><td className="px-4 py-3 text-slate-600">{log.role === "daycare" ? "Daycare admin" : log.role}</td><td className="px-4 py-3 capitalize text-slate-700">{log.action}</td><td className="px-4 py-3 capitalize text-slate-600">{log.module}</td><td className="px-4 py-3 font-mono text-xs text-slate-500">{log.record || "—"}</td><td className="px-4 py-3 text-slate-600">{log.ipAddress || "—"}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{log.createdAt ? new Date(log.createdAt).toLocaleString() : "—"}{log.metadata && Object.keys(log.metadata).length > 0 && <details className="mt-1"><summary className="cursor-pointer text-indigo-600">Details</summary><pre className="mt-1 max-w-72 overflow-auto whitespace-pre-wrap text-[10px]">{JSON.stringify(log.metadata, null, 2)}</pre></details>}</td></tr>)}</tbody></table></div> : <p className="rounded-xl border border-dashed border-slate-200 p-10 text-center text-sm text-slate-500">No activity has been recorded for this daycare yet.</p>}</div>
+        <footer className="flex items-center justify-between border-t border-slate-100 p-4"><span className="text-xs text-slate-500">Page {page} of {pages}</span><div className="flex gap-2"><button disabled={page <= 1 || loading} onClick={() => setPage((current) => current - 1)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold disabled:opacity-40">Previous</button><button disabled={page >= pages || loading} onClick={() => setPage((current) => current + 1)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold disabled:opacity-40">Next</button><button onClick={onClose} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white">Close</button></div></footer>
+    </section></div>;
+};
+
+const DAYCARE_PERMISSION_MODULES = [
+    ["dashboard", "Dashboard"], ["children", "Children"], ["parents", "Parents"], ["staff", "Staff"], ["classes", "Classes / Groups"],
+    ["attendance", "Child attendance"], ["staffAttendance", "Staff attendance"], ["dailyActivities", "Daily care records"], ["fees", "Fees & payments"],
+    ["leave", "Leave"], ["complaints", "Complaints"], ["requests", "Parent requests"], ["pickupPersons", "Pickup persons"], ["pickupLogs", "Pickup logs"],
+    ["notifications", "Notifications"], ["announcements", "Announcements"], ["events", "Events"], ["documents", "Documents"], ["activity", "Activity logs"],
+    ["reports", "Reports"], ["settings", "Settings"],
+];
+const DAYCARE_PERMISSION_ACTIONS = ["read", "create", "update", "delete"];
+
+const DaycareUsersModal = ({ daycare, token, onClose, onDataChanged }) => {
+    const [users, setUsers] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [roleFilter, setRoleFilter] = useState("all");
+    const [userLimit, setUserLimit] = useState(daycare.userLimit || 10);
+    const [savingLimit, setSavingLimit] = useState(false);
+    const [editingUser, setEditingUser] = useState("");
+    const [permissionDraft, setPermissionDraft] = useState({});
+    const [savingUser, setSavingUser] = useState("");
+
+    useEffect(() => {
+        let active = true;
+        getAdminDaycareUsers(daycare.daycareId, token).then(({ data }) => {
+            if (!active) return;
+            setUsers(data.users || []);
+            setUserLimit(data.daycare?.userLimit || 10);
+        }).catch((error) => toast.error(error.response?.data?.message || "Daycare users could not be loaded."))
+            .finally(() => { if (active) setLoading(false); });
+        return () => { active = false; };
+    }, [daycare.daycareId, token]);
+
+    const saveLimit = async (event) => {
+        event.preventDefault();
+        const limit = Number(userLimit);
+        if (!Number.isInteger(limit) || limit < 10) { toast.error("The allowed user count must be at least 10."); return; }
+        setSavingLimit(true);
+        try {
+            await updateAdminDaycareUserLimit(daycare.daycareId, limit, token);
+            toast.success("Daycare user allowance updated.");
+            onDataChanged();
+        } catch (error) { toast.error(error.response?.data?.message || "User allowance could not be updated."); }
+        finally { setSavingLimit(false); }
+    };
+
+    const updateUser = async (user, changes) => {
+        setSavingUser(String(user.id));
+        try {
+            const { data } = await updateAdminDaycareUser(daycare.daycareId, user.id, changes, token);
+            setUsers((current) => current.map((item) => String(item.id) === String(user.id) ? { ...item, ...data.user } : item));
+            toast.success(data.message || "User access updated.");
+            onDataChanged();
+            return true;
+        } catch (error) { toast.error(error.response?.data?.message || "User access could not be updated."); return false; }
+        finally { setSavingUser(""); }
+    };
+
+    const beginPermissions = (user) => {
+        setPermissionDraft(Object.fromEntries(Object.entries(user.permissions || {}).map(([key, actions]) => [key, Array.isArray(actions) ? [...actions] : []])));
+        setEditingUser(String(user.id));
+    };
+    const togglePermission = (moduleKey, action) => setPermissionDraft((current) => {
+        const actions = current[moduleKey] || [];
+        return { ...current, [moduleKey]: actions.includes(action) ? actions.filter((item) => item !== action) : [...actions, action] };
+    });
+    const toggleAll = (moduleKey) => setPermissionDraft((current) => {
+        const actions = current[moduleKey] || [];
+        return { ...current, [moduleKey]: DAYCARE_PERMISSION_ACTIONS.every((action) => actions.includes(action)) ? [] : [...DAYCARE_PERMISSION_ACTIONS] };
+    });
+    const visibleUsers = roleFilter === "all" ? users : users.filter((user) => user.role === roleFilter);
+    const activeCount = users.filter((user) => user.isActive).length;
+    const roleTabs = [["all", "All"], ["manager", "Managers"], ["caregiver", "Caregivers"], ["nurse", "Nurses"], ["support", "Support"]];
+
+    return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-3 backdrop-blur-sm" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section role="dialog" aria-modal="true" aria-labelledby="daycare-users-title" className="flex max-h-[92dvh] w-full max-w-5xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+        <header className="flex items-start justify-between border-b border-slate-100 px-5 py-4 sm:px-7"><div><p className="text-xs font-bold uppercase tracking-wide text-indigo-600">Super Admin · Users & roles</p><h2 id="daycare-users-title" className="mt-1 text-xl font-extrabold text-slate-900">{daycare.daycare} users</h2><p className="mt-1 text-sm text-slate-500">Manage staff login access and module permissions for this daycare.</p></div><button onClick={onClose} aria-label="Close daycare users" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><XCircle size={19} /></button></header>
+        <div className="overflow-y-auto p-5 sm:p-7"><form onSubmit={saveLimit} className="mb-5 flex flex-col gap-3 rounded-2xl border border-indigo-100 bg-indigo-50/60 p-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-sm font-bold text-slate-800">Staff user allowance</p><p className="mt-1 text-xs text-slate-600">{activeCount} active staff users · minimum allowance is 10. Daycare admins cannot exceed this limit.</p></div><div className="flex items-end gap-2"><label className="text-xs font-semibold text-slate-600">Allowed users<input type="number" min="10" step="1" value={userLimit} onChange={(event) => setUserLimit(event.target.value)} className="mt-1 block w-28 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label><button disabled={savingLimit} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50">{savingLimit ? "Saving…" : "Save limit"}</button></div></form>
+        <div className="mb-4 flex gap-2 overflow-x-auto" role="tablist" aria-label="Filter daycare users">{roleTabs.map(([value, label]) => <button key={value} role="tab" aria-selected={roleFilter === value} onClick={() => setRoleFilter(value)} type="button" className={`shrink-0 rounded-lg px-3 py-2 text-xs font-bold ${roleFilter === value ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-indigo-50"}`}>{label} <span className="ml-1 opacity-75">{value === "all" ? users.length : users.filter((user) => user.role === value).length}</span></button>)}</div>
+        {loading ? <p className="p-10 text-center text-sm text-slate-500">Loading daycare users…</p> : visibleUsers.length ? <div className="divide-y divide-slate-100 rounded-xl border border-slate-100">{visibleUsers.map((user) => <article key={user.id} className="p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center"><div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-slate-800">{user.name}</p><p className="mt-0.5 text-xs text-slate-500">{user.email} · <span className="capitalize">{user.role}</span></p></div><span className={`w-fit rounded-full px-2.5 py-1 text-xs font-bold ${user.isActive ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>{user.isActive ? "Active" : "Inactive"}</span><button disabled={savingUser === String(user.id)} onClick={() => updateUser(user, { isActive: !user.isActive })} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${user.isActive ? "border-rose-200 text-rose-700 hover:bg-rose-50" : "border-emerald-200 text-emerald-700 hover:bg-emerald-50"}`}>{user.isActive ? "Deactivate" : "Activate"}</button><button onClick={() => editingUser === String(user.id) ? setEditingUser("") : beginPermissions(user)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">{editingUser === String(user.id) ? "Close permissions" : "Manage permissions"}</button></div>
+            {editingUser === String(user.id) && <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4"><div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{DAYCARE_PERMISSION_MODULES.map(([moduleKey, label]) => <div key={moduleKey} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-3 py-2"><span className="text-xs font-semibold text-slate-700">{label}</span><div className="flex gap-2"><label className="flex items-center gap-1 text-[10px] font-bold text-indigo-600" title="Select all actions"><input type="checkbox" aria-label={`F: select all ${label} permissions`} checked={DAYCARE_PERMISSION_ACTIONS.every((action) => (permissionDraft[moduleKey] || []).includes(action))} onChange={() => toggleAll(moduleKey)} className="accent-indigo-600" />F</label><label className="flex items-center gap-1 text-[10px] font-bold text-emerald-700" title="Module access"><input type="checkbox" aria-label={`A: enable ${label}`} checked={(permissionDraft[moduleKey] || []).includes("read")} onChange={() => togglePermission(moduleKey, "read")} className="accent-emerald-600" />A</label>{DAYCARE_PERMISSION_ACTIONS.map((action) => <label key={action} className="flex items-center gap-1 text-[10px] capitalize text-slate-500" title={action}><input type="checkbox" checked={(permissionDraft[moduleKey] || []).includes(action)} onChange={() => togglePermission(moduleKey, action)} className="accent-indigo-600" />{action[0]}</label>)}</div></div>)}</div><div className="mt-3 flex justify-end"><button disabled={savingUser === String(user.id)} onClick={async () => { if (await updateUser(user, { permissions: permissionDraft })) setEditingUser(""); }} className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700 disabled:opacity-50">{savingUser === String(user.id) ? "Saving…" : "Save permissions"}</button></div></div>}</article>)}</div> : <p className="rounded-xl border border-dashed border-slate-200 p-10 text-center text-sm text-slate-500">No daycare staff logins for this role.</p>}
+        </div><footer className="border-t border-slate-100 p-4 text-right"><button onClick={onClose} className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600">Close</button></footer>
+    </section></div>;
 };
 
 const DaycareCard = ({ daycare, busy, onReview, onStatus, onView }) => {

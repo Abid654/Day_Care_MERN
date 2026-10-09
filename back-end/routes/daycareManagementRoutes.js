@@ -8,9 +8,15 @@ router.get("/overview", requireManagementPermission("read"), controller.getOverv
 router.get("/settings", requireManagementPermission("read"), controller.getSettings);
 router.put("/settings", requireManagementPermission("update"), controller.saveSettings);
 router.put("/security/password", controller.changePassword);
+router.get("/account", controller.getAccountProfile);
+router.put("/account", controller.updateAccountProfile);
+router.post("/account/photo", express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: "3mb" }), controller.uploadAccountPhoto);
+router.get("/account/photo", controller.getAccountPhoto);
+router.delete("/account/photo", controller.deleteAccountPhoto);
 router.get("/users", requireRole("daycare"), controller.listUsers);
 router.post("/users", requireRole("daycare"), controller.createUser);
 router.put("/users/:userId", requireRole("daycare"), controller.updateUser);
+router.delete("/users/:userId", requireRole("daycare"), controller.deleteUser);
 router.post("/parents/:parentId/reset-password", requireRole("daycare"), controller.resetParentPassword);
 router.post("/logout", requireManagementPermission("read"), controller.logLogout);
 router.post("/documents/files", requireManagementPermission("create"), express.raw({ type: ["application/pdf", "image/jpeg", "image/png", "image/webp"], limit: "10mb" }), controller.uploadDocument);
