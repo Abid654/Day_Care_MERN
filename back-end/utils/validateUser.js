@@ -1,5 +1,5 @@
 const validateRegisterData = (data) => {
-  const { name, email, password, phone, role } = data;
+  const { name, email, password, phone, address, role } = data;
 
   const errors = {};
 
@@ -25,6 +25,10 @@ const validateRegisterData = (data) => {
 
   if (!phone || phone.trim() === "") {
     errors.phone = "Phone number is required";
+  }
+
+  if (role === "parent" && (typeof address !== "string" || !address.trim() || address.trim().length > 500)) {
+    errors.address = "A residential address of up to 500 characters is required";
   }
 
   if (!role) {

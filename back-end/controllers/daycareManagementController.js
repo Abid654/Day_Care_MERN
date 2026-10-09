@@ -6,10 +6,10 @@ const { randomBytes, randomUUID } = require("crypto");
 const { publishCenterNotification } = require("../services/realtime");
 
 const MODULES = {
-  children: { model: "Child", search: ["name", "allergies", "nationality"], softDelete: true, populate: [{ path: "parentContact", select: "name" }, { path: "assignedCaregiver", select: "fullName" }, { path: "classGroup", select: "name" }], fields: ["name", "profilePhoto", "dateOfBirth", "gender", "bloodGroup", "nationality", "medicalInformation", "allergies", "emergencyMedicalInformation", "address", "enrollmentDate", "parentContact", "emergencyContactName", "emergencyContactNumber", "assignedCaregiver", "classGroup", "specialRequirements", "specialNotes", "status"] },
-  parents: { model: "DaycareParent", search: ["name", "email", "phone"], softDelete: true, fields: ["name", "email", "phone", "profilePhoto", "address", "emergencyContactName", "emergencyContactPhone", "status"] },
-  staff: { model: "Staff", search: ["fullName", "email", "phone", "jobTitle"], softDelete: true, populate: [{ path: "assignedClass", select: "name" }], fields: ["fullName", "email", "phone", "profilePhoto", "address", "dateOfBirth", "gender", "qualification", "experienceYears", "joiningDate", "jobTitle", "role", "assignedClass", "emergencyContactName", "emergencyContactPhone", "documents", "status"] },
-  classes: { model: "ClassGroup", search: ["name", "description"], softDelete: true, populate: [{ path: "assignedCaregiver", select: "fullName" }, { path: "children", select: "name" }], fields: ["name", "description", "minAgeMonths", "maxAgeMonths", "capacity", "assignedCaregiver", "status"] },
+  children: { model: "Child", search: ["name", "allergies", "nationality"], populate: [{ path: "parentContact", select: "name" }, { path: "assignedCaregiver", select: "fullName" }, { path: "classGroup", select: "name" }], fields: ["name", "profilePhoto", "dateOfBirth", "gender", "bloodGroup", "nationality", "medicalInformation", "allergies", "emergencyMedicalInformation", "address", "enrollmentDate", "parentContact", "emergencyContactName", "emergencyContactNumber", "assignedCaregiver", "classGroup", "specialRequirements", "specialNotes", "status"] },
+  parents: { model: "DaycareParent", search: ["name", "email", "phone"], fields: ["name", "email", "phone", "profilePhoto", "address", "emergencyContactName", "emergencyContactPhone", "status"] },
+  staff: { model: "Staff", search: ["fullName", "email", "phone", "jobTitle"], populate: [{ path: "assignedClass", select: "name" }], fields: ["fullName", "email", "phone", "profilePhoto", "address", "dateOfBirth", "gender", "qualification", "experienceYears", "joiningDate", "jobTitle", "role", "assignedClass", "emergencyContactName", "emergencyContactPhone", "documents", "status"] },
+  classes: { model: "ClassGroup", search: ["name", "description"], populate: [{ path: "assignedCaregiver", select: "fullName" }, { path: "children", select: "name" }], fields: ["name", "description", "minAgeMonths", "maxAgeMonths", "capacity", "assignedCaregiver", "status"] },
   attendance: { model: "Attendance", search: ["notes"], populate: [{ path: "child", select: "name" }], fields: ["child", "date", "status", "checkIn", "checkOut", "notes"] },
   staffAttendance: { model: "StaffAttendance", search: ["notes"], populate: [{ path: "staff", select: "fullName" }], fields: ["staff", "date", "status", "checkIn", "checkOut", "notes"] },
   dailyActivities: { model: "DailyActivity", search: ["notes", "activities", "healthObservations"], populate: [{ path: "child", select: "name" }], fields: ["child", "date", "meals", "snacks", "nap", "toileting", "activities", "mood", "behavior", "healthObservations", "medication", "notes", "sharedWithParent"] },
@@ -17,6 +17,7 @@ const MODULES = {
   leave: { model: "LeaveRequest", search: ["leaveType", "reason", "adminRemarks"], populate: [{ path: "staff", select: "fullName" }], fields: ["staff", "leaveType", "startDate", "endDate", "reason", "status", "adminRemarks"] },
   complaints: { model: "Complaint", search: ["complaintNumber", "subject", "description", "internalNotes"], populate: [{ path: "parent", select: "name" }, { path: "child", select: "name" }, { path: "assignedStaff", select: "fullName" }], fields: ["complaintNumber", "parent", "child", "subject", "description", "priority", "assignedStaff", "status", "response", "internalNotes", "history"] },
   requests: { model: "ParentRequest", search: ["subject", "description", "adminRemarks"], populate: [{ path: "parent", select: "name" }, { path: "child", select: "name" }], fields: ["parent", "child", "requestType", "subject", "description", "status", "adminRemarks"] },
+  bookings: { model: "Booking", search: ["childName", "supportType", "notes"], populate: [{ path: "parentContact", select: "name email phone" }, { path: "child", select: "name" }], fields: ["status"], readOnly: true },
   pickupPersons: { model: "PickupAuthorization", search: ["name", "relationship", "phone", "identificationNumber"], populate: [{ path: "child", select: "name" }], fields: ["child", "name", "relationship", "phone", "identificationNumber", "photo", "authorized", "notes"] },
   pickupLogs: { model: "PickupLog", search: ["pickupName", "notes"], populate: [{ path: "child", select: "name" }, { path: "pickupPerson", select: "name relationship" }, { path: "verifiedBy", select: "name" }], fields: ["child", "pickupPerson", "pickupName", "eventType", "occurredAt", "verified", "notes"] },
   notifications: { model: "CenterNotification", search: ["title", "message"], populate: [{ path: "parent", select: "name" }, { path: "child", select: "name" }, { path: "staffMember", select: "fullName" }, { path: "classGroup", select: "name" }], fields: ["title", "message", "type", "audience", "parent", "child", "staffMember", "classGroup", "status"] },
@@ -266,9 +267,20 @@ async function listRecords(req, res) {
     ]);
     let resultRecords = records;
     if (req.params.module === "parents" && records.length) {
-      const counts = await req.models.Child.aggregate([{ $match: { parentContact: { $in: records.map((record) => record._id) } } }, { $group: { _id: "$parentContact", count: { $sum: 1 } } }]);
+      const [counts, parentLinks] = await Promise.all([
+        req.models.Child.aggregate([{ $match: { parentContact: { $in: records.map((record) => record._id) } } }, { $group: { _id: "$parentContact", count: { $sum: 1 } } }]),
+        req.mainModels.ParentTenantLink.find({ tenant: req.tenant._id, daycareParent: { $in: records.map((record) => record._id) }, isActive: true }).select("daycareParent parentUser").lean(),
+      ]);
+      const parentUserByDaycareParent = new Map(parentLinks.filter((link) => link.parentUser).map((link) => [String(link.daycareParent), link.parentUser]));
+      const parentUserIds = records.map((record) => record.parentUser || parentUserByDaycareParent.get(String(record._id))).filter(Boolean);
+      const parentAccounts = await req.mainModels.User.find({ _id: { $in: parentUserIds }, role: "parent", isActive: true }).select("_id profilePhoto").lean();
       const countByParent = new Map(counts.map((item) => [String(item._id), item.count]));
-      resultRecords = records.map((record) => ({ ...record, childrenCount: countByParent.get(String(record._id)) || 0 }));
+      const photoByParentId = new Map(parentAccounts.map((account) => [String(account._id), account.profilePhoto || ""]));
+      resultRecords = records.map((record) => ({
+        ...record,
+        profilePhoto: photoByParentId.get(String(record.parentUser || parentUserByDaycareParent.get(String(record._id)))) || record.profilePhoto || "",
+        childrenCount: countByParent.get(String(record._id)) || 0,
+      }));
     }
     return res.json({ success: true, records: resultRecords, pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (error) {
@@ -285,6 +297,14 @@ async function createRecord(req, res) {
   let createdParentId = null;
   try {
     const fields = pickFields(req.body || {}, config.fields);
+    const acceptedBookingId = config.model === "Child" ? req.body?.acceptedBookingId : null;
+    let acceptedBooking = null;
+    if (acceptedBookingId) {
+      if (!validId(acceptedBookingId)) return res.status(400).json({ success: false, message: "Invalid accepted booking reference" });
+      acceptedBooking = await req.models.Booking.findOne({ _id: acceptedBookingId, daycare: req.tenant.ownerUserId, parentContact: fields.parentContact, status: "accepted", child: null });
+      if (!acceptedBooking) return res.status(409).json({ success: false, message: "This accepted booking is already linked or no longer available. Reload the child form and try again." });
+    }
+    if (config.model === "Child" && (typeof fields.status !== "string" || !fields.status.trim())) delete fields.status;
     if (["Attendance", "StaffAttendance"].includes(config.model)) {
       fields.date = normalizeAttendanceDate(fields.date);
       if (!fields.date) return res.status(400).json({ success: false, message: "Enter a valid attendance date" });
@@ -351,6 +371,10 @@ async function createRecord(req, res) {
         return res.status(400).json({ success: false, message: "This class has reached its capacity" });
       }
     }
+    if (acceptedBooking) {
+      acceptedBooking.child = record._id;
+      await acceptedBooking.save();
+    }
     await writeAudit(req, "created", req.params.module, record._id, { title: fields.name || fields.fullName || fields.title || fields.subject || fields.invoiceNumber || "" });
     return res.status(201).json({ success: true, record, message: "Record created successfully" });
   } catch (error) {
@@ -373,9 +397,17 @@ async function updateRecord(req, res) {
   let reservedClassId = null;
   try {
     const changes = pickFields(req.body || {}, config.fields);
+    if (config.model === "Child" && changes.gender === "") changes.gender = null;
+    if (config.model === "Child" && Object.keys(changes).length === 0) {
+      const existingChild = await findScopedRecord(req, config).lean();
+      if (!existingChild) return res.status(404).json({ success: false, message: "Record not found" });
+      return res.json({ success: true, record: existingChild, message: "Record is already up to date" });
+    }
     const previousNotification = config.model === "CenterNotification"
       ? await config.Model.findById(req.params.recordId).select("status audience parent child staffMember classGroup").lean()
       : null;
+    if (config.model === "CenterNotification" && !previousNotification) return res.status(404).json({ success: false, message: "Notification not found" });
+    if (config.model === "CenterNotification" && previousNotification.status === "sent") return res.status(409).json({ success: false, message: "Sent notifications cannot be edited" });
     if (["Attendance", "StaffAttendance"].includes(config.model)) {
       const relationField = config.model === "Attendance" ? "child" : "staff";
       const current = await config.Model.findById(req.params.recordId).select(`${relationField} date checkIn checkOut`).lean();
@@ -484,7 +516,8 @@ async function updateRecord(req, res) {
   } catch (error) {
     if (reservedClassId) await req.models.ClassGroup.updateOne({ _id: reservedClassId }, { $pull: { children: req.params.recordId } }).catch(() => {});
     if (error.name === "ValidationError" || error.name === "CastError") return res.status(400).json({ success: false, message: error.message });
-    console.error(`Daycare ${req.params.module} update failed:`, error.message);
+    if (error.code === 11000) return res.status(409).json({ success: false, message: "A record with this information already exists" });
+    console.error(`Daycare ${req.params.module} update failed:`, { name: error.name, code: error.code, message: error.message, stack: error.stack });
     return res.status(503).json({ success: false, message: "Record could not be updated" });
   }
 }
@@ -497,12 +530,9 @@ async function deleteRecord(req, res) {
   try {
     let record;
     const scope = await caregiverScope(req, req.params.module);
-    if (config.softDelete) record = await config.Model.findOneAndUpdate({ _id: req.params.recordId, ...(scope || {}) }, { $set: { status: "inactive" } }, { new: true, runValidators: true });
-    else {
-      const query = config.Model.findOneAndDelete({ _id: req.params.recordId, ...(scope || {}) });
-      if (config.model === "DaycareDocument") query.select("+storageKey mimeType");
-      record = await query;
-    }
+    const query = config.Model.findOneAndDelete({ _id: req.params.recordId, ...(scope || {}) });
+    if (config.model === "DaycareDocument") query.select("+storageKey mimeType");
+    record = await query;
     if (!record) return res.status(404).json({ success: false, message: "Record not found" });
     if (config.model === "DaycareParent") await req.mainModels.ParentTenantLink.updateOne({ tenant: req.tenant._id, daycareParent: record._id }, { $set: { isActive: false } });
     if (config.model === "Staff" && record.userAccount) {
@@ -514,8 +544,9 @@ async function deleteRecord(req, res) {
       if (extension) await fs.unlink(path.join(__dirname, "..", "private_uploads", "daycare", req.tenant._id.toString(), `${path.basename(record.storageKey)}${extension}`)).catch(() => {});
     }
     if (config.model === "Child" && record.classGroup) await req.models.ClassGroup.updateOne({ _id: record.classGroup }, { $pull: { children: record._id } });
-    await writeAudit(req, config.softDelete ? "deactivated" : "deleted", req.params.module, record._id);
-    return res.json({ success: true, message: config.softDelete ? "Record deactivated" : "Record deleted" });
+    if (config.model === "ClassGroup") await req.models.Child.updateMany({ classGroup: record._id }, { $unset: { classGroup: 1 } });
+    await writeAudit(req, "deleted", req.params.module, record._id);
+    return res.json({ success: true, message: "Record deleted" });
   } catch (error) {
     console.error(`Daycare ${req.params.module} delete failed:`, error.message);
     return res.status(503).json({ success: false, message: "Record could not be removed" });
@@ -638,12 +669,25 @@ async function getProfilePhoto(req, res) {
   if (!config || !validId(req.params.recordId)) return res.status(404).json({ success: false, message: "Profile photo not found" });
   try {
     const scope = await caregiverScope(req, req.params.module);
-    const record = await req.models[config.model].findOne({ _id: req.params.recordId, ...(scope || {}) }).select(field).lean();
-    const storageKey = typeof record?.[field] === "string" && record[field].startsWith("private:") ? record[field].slice("private:".length) : "";
+    const selectedFields = req.params.module === "parents" ? `${field} parentUser` : field;
+    const record = await req.models[config.model].findOne({ _id: req.params.recordId, ...(scope || {}) }).select(selectedFields).lean();
+    let photoValue = record?.[field];
+    let photoOwnerId = "";
+    if (req.params.module === "parents") {
+      const linkedParentUserId = record?.parentUser || (await req.mainModels.ParentTenantLink.findOne({ tenant: req.tenant._id, daycareParent: record?._id, isActive: true }).select("parentUser").lean())?.parentUser;
+      const parentAccount = linkedParentUserId ? await req.mainModels.User.findOne({ _id: linkedParentUserId, role: "parent", isActive: true }).select("profilePhoto").lean() : null;
+      if (parentAccount?.profilePhoto) {
+        photoValue = parentAccount.profilePhoto;
+        photoOwnerId = String(linkedParentUserId);
+      }
+    }
+    const storageKey = typeof photoValue === "string" && photoValue.startsWith("private:") ? photoValue.slice("private:".length) : "";
     const match = storageKey.match(/^([a-f0-9-]{36})\.(jpg|png|webp)$/);
     if (!match) return res.status(404).json({ success: false, message: "Profile photo not found" });
     const mimeType = { jpg: "image/jpeg", png: "image/png", webp: "image/webp" }[match[2]];
-    const filePath = path.join(__dirname, "..", "private_uploads", "daycare", req.tenant._id.toString(), "profile_photos", storageKey);
+    const filePath = photoOwnerId
+      ? path.join(__dirname, "..", "private_uploads", "parents", photoOwnerId, "profile_photo", storageKey)
+      : path.join(__dirname, "..", "private_uploads", "daycare", req.tenant._id.toString(), "profile_photos", storageKey);
     res.set({ "Content-Type": mimeType, "Content-Disposition": "inline", "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store" });
     return res.sendFile(filePath, (error) => { if (error && !res.headersSent) res.status(error.code === "ENOENT" ? 404 : 500).json({ success: false, message: "Profile photo is unavailable" }); });
   } catch (error) {
@@ -862,4 +906,27 @@ async function deleteAccountPhoto(req, res) {
   }
 }
 
-module.exports = { listRecords, createRecord, updateRecord, deleteRecord, getOverview, getSettings, saveSettings, listUsers, createUser, updateUser, deleteUser, resetParentPassword, logLogout, uploadDocument, downloadDocument, uploadProfilePhoto, getProfilePhoto, recordFeePayment, changePassword, getAccountProfile, updateAccountProfile, uploadAccountPhoto, getAccountPhoto, deleteAccountPhoto };
+async function updateBookingStatus(req, res) {
+  if (!validId(req.params.recordId)) return res.status(400).json({ success: false, message: "Invalid booking id" });
+  const status = req.body?.status;
+  if (!["accepted", "rejected"].includes(status)) return res.status(400).json({ success: false, message: "Choose accept or reject for a pending request" });
+  try {
+    const booking = await req.models.Booking.findOne({ _id: req.params.recordId, daycare: req.tenant.ownerUserId });
+    if (!booking) return res.status(404).json({ success: false, message: "Booking request not found" });
+    if (booking.status !== "pending") return res.status(409).json({ success: false, message: "Only pending booking requests can be reviewed" });
+    booking.status = status;
+    await booking.save();
+    const parent = await req.mainModels.ParentTenantLink.findOne({ tenant: req.tenant._id, parentUser: booking.parent, isActive: true }).select("daycareParent").lean();
+    if (parent) {
+      const notice = await req.models.CenterNotification.create({ title: status === "accepted" ? "Booking request accepted" : "Booking request declined", message: `${req.tenant.name}: your care request for ${booking.childName || "your child"} (${new Date(booking.startDate).toLocaleDateString()} to ${new Date(booking.endDate).toLocaleDateString()}) was ${status}. Contact the daycare to confirm next steps and fees.`, type: "general", audience: "parent", parent: parent.daycareParent, status: "sent", sentAt: new Date(), createdBy: req.user.userId });
+      await publishCenterNotification(req, notice);
+    }
+    await writeAudit(req, "booking-status-updated", "bookings", booking._id, { status });
+    return res.json({ success: true, booking, message: `Booking request ${status}` });
+  } catch (error) {
+    console.error("Booking status update failed:", error.message);
+    return res.status(503).json({ success: false, message: "Booking request could not be updated" });
+  }
+}
+
+module.exports = { listRecords, createRecord, updateRecord, deleteRecord, getOverview, getSettings, saveSettings, listUsers, createUser, updateUser, deleteUser, resetParentPassword, logLogout, uploadDocument, downloadDocument, uploadProfilePhoto, getProfilePhoto, recordFeePayment, updateBookingStatus, changePassword, getAccountProfile, updateAccountProfile, uploadAccountPhoto, getAccountPhoto, deleteAccountPhoto };

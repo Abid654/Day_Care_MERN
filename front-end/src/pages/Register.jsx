@@ -15,7 +15,7 @@ const Register = () => {
     const [registrationComplete, setRegistrationComplete] = useState(false);
 
     const formik = useFormik({
-        initialValues: { name: "", email: "", password: "", confirmPassword: "", phone: "", role: "parent" },
+        initialValues: { name: "", email: "", password: "", confirmPassword: "", phone: "", address: "", role: "parent" },
         validationSchema: registerSchema,
         onSubmit: async (values, { resetForm }) => {
 
@@ -210,6 +210,12 @@ const Register = () => {
                             </div>
 
                         </div>
+
+                        {formik.values.role === "parent" && <div>
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">Residential Address</label>
+                            <textarea name="address" value={formik.values.address} onChange={formik.handleChange} onBlur={formik.handleBlur} rows={2} maxLength={500} placeholder="Street, area, city" className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 outline-none transition focus:bg-white focus:border-sky-500 focus:ring-4 focus:ring-sky-100" />
+                            {formik.touched.address && formik.errors.address && <p className="mt-1 text-xs font-medium text-rose-600">{formik.errors.address}</p>}
+                        </div>}
 
                         {/* Password + Confirm Password */}
                         <div className="grid sm:grid-cols-2 gap-3">

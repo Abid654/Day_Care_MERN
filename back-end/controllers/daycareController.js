@@ -21,18 +21,20 @@ async function listDaycares(req, res) {
       const models = getTenantModels(getTenantConnection(tenant.databaseName));
       const [user, profile] = await Promise.all([
         models.User.findOne({ _id: tenant.ownerUserId, role: "daycare", isActive: true }).select("name phone").lean(),
-        models.DaycareProfile.findOne({ user: tenant.ownerUserId, approvalStatus: "approved", isVerified: true }).select("daycareName description address area phone services fee paymentOptions images isVerified").lean(),
+        models.DaycareProfile.findOne({ user: tenant.ownerUserId, approvalStatus: "approved", isVerified: true }).select("daycareName description address area phone services fee paymentOptions images isVerified experienceYears facilities").lean(),
       ]);
       if (!user) return null;
       return {
         id: tenant._id,
-        name: profile?.daycareName || tenant.name || user.name,
+        name: profile?.daycareName || "Daycare profile incomplete",
         contactName: user.name,
         phone: profile?.phone || user.phone,
         description: profile?.description || "This daycare has recently joined. Contact them to learn more about their care services.",
         area: profile?.area || profile?.address || "Location details coming soon",
         services: profile?.services || [],
         fee: profile?.fee ?? null,
+        experienceYears: profile?.experienceYears ?? 0,
+        facilities: profile?.facilities || [],
         paymentOptions: profile?.paymentOptions || [],
         images: profile?.images || [],
         isVerified: profile?.isVerified || false,
@@ -119,7 +121,7 @@ async function saveMyProfile(req, res) {
     );
     await req.mainModels.Tenant.updateOne(
       { _id: req.tenant._id, status: "active" },
-      { $set: { listingStatus: "pending" }, $unset: { reviewedAt: 1, reviewedBy: 1 } },
+      { $set: { name: profile.daycareName, listingStatus: "pending" }, $unset: { reviewedAt: 1, reviewedBy: 1 } },
     );
     return res.json({ success: true, message: "Profile submitted for admin review", profile, listingStatus: "pending" });
   } catch (error) {
@@ -173,7 +175,7 @@ async function listAdminDaycares(req, res) {
       ]);
       return {
         id: tenant._id,
-        name: profile?.daycareName || tenant.name || user?.name || "Daycare",
+        name: profile?.daycareName || "Daycare profile incomplete",
         ownerEmail: user?.email || tenant.ownerEmail,
         contactName: user?.name || tenant.name,
         phone: profile?.phone || user?.phone || "",
@@ -229,7 +231,7 @@ async function getAdminOverview(req, res) {
     const recentActivity = [];
     const tenantResults = await Promise.allSettled(tenants.map(async (tenant) => {
       const models = getTenantModels(getTenantConnection(tenant.databaseName));
-      const [children, activeChildren, bookings, payments, revenue, complaints, reviews, audit] = await Promise.all([
+      const [children, activeChildren, bookings, payments, revenue, complaints, reviews, audit, profile] = await Promise.all([
         models.Child.countDocuments({}),
         models.Child.countDocuments({ status: "active" }),
         models.Booking.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
@@ -238,8 +240,9 @@ async function getAdminOverview(req, res) {
         models.Complaint.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }]),
         models.Review.aggregate([{ $group: { _id: null, count: { $sum: 1 }, rating: { $sum: "$rating" } } }]),
         models.AuditLog.find({}).sort({ createdAt: -1 }).limit(5).select("user action module record metadata ipAddress createdAt").populate("user", "name email role").lean(),
+        models.DaycareProfile.findOne({ user: tenant.ownerUserId }).select("daycareName").lean(),
       ]);
-      return { tenant, children, activeChildren, bookings, payments, revenue: revenue[0]?.amount || 0, complaints, reviews: reviews[0] || { count: 0, rating: 0 }, audit };
+      return { tenant, daycareName: profile?.daycareName || tenant.name || "Daycare", children, activeChildren, bookings, payments, revenue: revenue[0]?.amount || 0, complaints, reviews: reviews[0] || { count: 0, rating: 0 }, audit };
     }));
     for (const result of tenantResults) {
       if (result.status !== "fulfilled") { console.error("Platform overview tenant aggregation failed:", result.reason.message); continue; }
@@ -272,7 +275,7 @@ async function getAdminOverview(req, res) {
       totals.reviews += item.reviews.count;
       totals.ratingSum += item.reviews.rating;
       totals.ratingCount += item.reviews.count;
-      for (const log of item.audit) recentActivity.push({ tenant: item.tenant.name, user: log.user?.name || "System", role: log.user?.role || "unknown", action: log.action, module: log.module, record: log.record, metadata: log.metadata, createdAt: log.createdAt });
+      for (const log of item.audit) recentActivity.push({ daycareName: item.daycareName, user: log.user?.name || "System", role: log.user?.role || "unknown", action: log.action, module: log.module, record: log.record, metadata: log.metadata, createdAt: log.createdAt });
     }
     const averageRating = totals.ratingCount ? Math.round((totals.ratingSum / totals.ratingCount) * 10) / 10 : null;
     return res.json({ success: true, overview: {
@@ -282,7 +285,7 @@ async function getAdminOverview(req, res) {
       payments: { total: totals.payments, paid: totals.paidPayments, pending: totals.pendingPayments, failed: totals.failedPayments, refunded: totals.refundedPayments, revenue: totals.revenue },
       complaints: { pending: totals.pendingComplaints, inProgress: totals.inProgressComplaints, resolved: totals.resolvedComplaints, rejected: totals.rejectedComplaints },
       reviews: { total: totals.reviews, averageRating },
-      registrationTrend: tenants.slice(0, 30).reverse().map((item) => ({ date: item.createdAt, label: item.name, status: item.status === "suspended" ? "suspended" : item.listingStatus })),
+      registrationTrend: tenants.slice(0, 30).reverse().map((item) => ({ date: item.createdAt, label: tenantResults.find((result) => result.status === "fulfilled" && String(result.value.tenant._id) === String(item._id))?.value.daycareName || item.name || "Daycare", status: item.status === "suspended" ? "suspended" : item.listingStatus })),
       recentActivity: recentActivity.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 12),
     } });
   } catch (error) {
@@ -298,13 +301,25 @@ async function listAdminRecords(req, res) {
   try {
     const main = req.mainModels;
     const tenants = await main.Tenant.find({ status: { $in: ["active", "suspended", "inactive"] } }).select("_id name ownerUserId databaseName status listingStatus userLimit createdAt").lean();
-    const tenantNameById = new Map(tenants.map((tenant) => [String(tenant._id), tenant.name]));
-    const parentUsers = await main.User.find({ role: "parent" }).select("_id name email phone isActive createdAt").lean();
+    const tenantNames = await Promise.all(tenants.map(async (tenant) => {
+      try {
+        const models = getTenantModels(getTenantConnection(tenant.databaseName));
+        const profile = await models.DaycareProfile.findOne({ user: tenant.ownerUserId }).select("daycareName").lean();
+        return [String(tenant._id), profile?.daycareName || "Daycare"];
+      } catch {
+        return [String(tenant._id), "Daycare"];
+      }
+    }));
+    const tenantNameById = new Map(tenantNames);
+    const daycareName = (tenant) => tenantNameById.get(String(tenant._id)) || "Daycare";
+    const parentUsers = await main.User.find({ role: "parent" }).select("_id name email phone address area emergencyContactName emergencyContactPhone childcareType careStartTime careEndTime isActive createdAt").lean();
     const parentById = new Map(parentUsers.map((parent) => [String(parent._id), parent]));
     let rows = [];
+    let parentCountsByDaycare = new Map();
 
     if (moduleName === "parents") {
       const links = await main.ParentTenantLink.find({ isActive: true }).select("tenant parentUser daycareParent").lean();
+      parentCountsByDaycare = new Map(tenants.map((tenant) => [String(tenant._id), new Set(links.filter((link) => String(link.tenant) === String(tenant._id) && link.parentUser).map((link) => String(link.parentUser))).size]));
       const linked = new Map();
       for (const tenant of tenants) {
         const tenantLinks = links.filter((link) => String(link.tenant) === String(tenant._id) && link.parentUser);
@@ -319,8 +334,9 @@ async function listAdminRecords(req, res) {
           if (!parent) continue;
           const item = linked.get(String(parent._id)) || { ...parent, childrenCount: 0, daycares: [] };
           const record = parentRecordById.get(String(link.daycareParent));
-          item.childrenCount += countByParent.get(String(link.daycareParent)) || 0;
-          item.daycares.push({ id: tenant._id, name: tenant.name, parentName: record?.name || "Family", status: tenant.status });
+          const daycareChildrenCount = countByParent.get(String(link.daycareParent)) || 0;
+          item.childrenCount += daycareChildrenCount;
+          item.daycares.push({ id: tenant._id, name: daycareName(tenant), parentName: record?.name || "Family", parentStatus: record?.status || "active", childrenCount: daycareChildrenCount, status: tenant.status });
           linked.set(String(parent._id), item);
         }
       }
@@ -333,7 +349,7 @@ async function listAdminRecords(req, res) {
           models.User.findOne({ _id: tenant.ownerUserId, role: "daycare" }).select("_id name email phone isActive createdAt").lean(),
           main.TenantMembership.find({ tenant: tenant._id }).select("user email role isActive createdAt").lean(),
         ]);
-        if (owner) rows.push({ id: owner._id, name: owner.name, email: owner.email, phone: owner.phone, role: "daycare admin", isActive: owner.isActive && tenant.status === "active", createdAt: owner.createdAt, daycare: tenant.name, daycareId: tenant._id, userLimit: Math.max(10, Number(tenant.userLimit) || 10), userCount: memberships.filter((membership) => membership.isActive).length });
+        if (owner) rows.push({ id: owner._id, name: owner.name, email: owner.email, phone: owner.phone, role: "daycare admin", isActive: owner.isActive && tenant.status === "active", createdAt: owner.createdAt, daycare: daycareName(tenant), daycareId: tenant._id, userLimit: Math.max(10, Number(tenant.userLimit) || 10), userCount: memberships.filter((membership) => membership.isActive).length });
       }
     } else {
       const settled = await Promise.allSettled(tenants.map(async (tenant) => {
@@ -343,25 +359,25 @@ async function listAdminRecords(req, res) {
         let records = [];
         if (moduleName === "children") {
           records = await models.Child.find({}).select("name dateOfBirth gender enrollmentDate status classGroup parentContact").populate("classGroup", "name").sort({ createdAt: -1 }).lean();
-          return records.map((child) => ({ id: child._id, name: child.name, dateOfBirth: child.dateOfBirth, gender: child.gender, enrollmentDate: child.enrollmentDate, status: child.status, className: child.classGroup?.name || "", parentId: parentIdByDaycareParent.get(String(child.parentContact)) || "", parentName: parentById.get(parentIdByDaycareParent.get(String(child.parentContact)))?.name || "", daycareId: tenant._id, daycare: tenant.name }));
+          return records.map((child) => ({ id: child._id, name: child.name, dateOfBirth: child.dateOfBirth, gender: child.gender, enrollmentDate: child.enrollmentDate, status: child.status, className: child.classGroup?.name || "", parentId: parentIdByDaycareParent.get(String(child.parentContact)) || "", parentName: parentById.get(parentIdByDaycareParent.get(String(child.parentContact)))?.name || "", daycareId: tenant._id, daycare: daycareName(tenant) }));
         }
         if (moduleName === "bookings") {
           records = await models.Booking.find({}).select("parent child startDate endDate supportType status createdAt").populate("child", "name").sort({ createdAt: -1 }).lean();
-          return records.map((item) => ({ id: item._id, parentId: item.parent, parent: parentById.get(String(item.parent))?.name || "Parent", childId: item.child?._id, child: item.child?.name || "", date: item.startDate, endDate: item.endDate, serviceType: item.supportType, status: item.status, createdAt: item.createdAt, daycareId: tenant._id, daycare: tenant.name }));
+          return records.map((item) => ({ id: item._id, parentId: item.parent, parent: parentById.get(String(item.parent))?.name || "Parent", childId: item.child?._id, child: item.child?.name || "", date: item.startDate, endDate: item.endDate, serviceType: item.supportType, status: item.status, createdAt: item.createdAt, daycareId: tenant._id, daycare: daycareName(tenant) }));
         }
         if (moduleName === "payments") {
           records = await models.Payment.find({}).select("parent booking amount paymentMethod status transactionId paidAt createdAt").populate({ path: "booking", select: "child", populate: { path: "child", select: "name" } }).sort({ createdAt: -1 }).lean();
-          return records.map((item) => ({ id: item._id, transactionId: item.transactionId || String(item._id), parentId: item.parent, parent: parentById.get(String(item.parent))?.name || "Parent", childId: item.booking?.child?._id, child: item.booking?.child?.name || "", amount: item.amount, method: item.paymentMethod, status: item.status, date: item.paidAt || item.createdAt, daycareId: tenant._id, daycare: tenant.name }));
+          return records.map((item) => ({ id: item._id, transactionId: item.transactionId || String(item._id), parentId: item.parent, parent: parentById.get(String(item.parent))?.name || "Parent", childId: item.booking?.child?._id, child: item.booking?.child?.name || "", amount: item.amount, method: item.paymentMethod, status: item.status, date: item.paidAt || item.createdAt, daycareId: tenant._id, daycare: daycareName(tenant) }));
         }
         if (moduleName === "complaints") {
           records = await models.Complaint.find({}).select("complaintNumber parent child subject description priority status response createdAt updatedAt").populate("parent", "name parentUser").populate("child", "name").sort({ createdAt: -1 }).lean();
-          return records.map((item) => ({ id: item._id, complaintNumber: item.complaintNumber, parentId: parentIdByDaycareParent.get(String(item.parent?._id)) || String(item.parent?.parentUser || ""), parent: parentById.get(parentIdByDaycareParent.get(String(item.parent?._id)) || String(item.parent?.parentUser || ""))?.name || item.parent?.name || "Parent", childId: item.child?._id, child: item.child?.name || "", subject: item.subject, description: item.description, priority: item.priority, status: item.status, response: item.response, createdAt: item.createdAt, daycareId: tenant._id, daycare: tenant.name }));
+          return records.map((item) => ({ id: item._id, complaintNumber: item.complaintNumber, parentId: parentIdByDaycareParent.get(String(item.parent?._id)) || String(item.parent?.parentUser || ""), parent: parentById.get(parentIdByDaycareParent.get(String(item.parent?._id)) || String(item.parent?.parentUser || ""))?.name || item.parent?.name || "Parent", childId: item.child?._id, child: item.child?.name || "", subject: item.subject, description: item.description, priority: item.priority, status: item.status, response: item.response, createdAt: item.createdAt, daycareId: tenant._id, daycare: daycareName(tenant) }));
         }
         if (moduleName === "reviews") {
           records = await models.Review.find({}).select("reviewer daycare child rating comment reviewType createdAt").populate("child", "name").sort({ createdAt: -1 }).lean();
           const reviewers = await main.User.find({ _id: { $in: records.map((item) => item.reviewer) } }).select("_id name email").lean();
           const reviewerById = new Map(reviewers.map((item) => [String(item._id), item]));
-          return records.map((item) => ({ id: item._id, parentId: item.reviewer, parent: reviewerById.get(String(item.reviewer))?.name || "Parent", daycareOwnerId: item.daycare, childId: item.child?._id, child: item.child?.name || "", rating: item.rating, comment: item.comment, reviewType: item.reviewType, createdAt: item.createdAt, daycareId: tenant._id, daycare: tenant.name }));
+          return records.map((item) => ({ id: item._id, parentId: item.reviewer, parent: reviewerById.get(String(item.reviewer))?.name || "Parent", daycareOwnerId: item.daycare, childId: item.child?._id, child: item.child?.name || "", rating: item.rating, comment: item.comment, reviewType: item.reviewType, createdAt: item.createdAt, daycareId: tenant._id, daycare: daycareName(tenant) }));
         }
         if (moduleName === "activity-logs") {
           const [activityCount, latestActivity, owner, profile] = await Promise.all([
@@ -370,7 +386,7 @@ async function listAdminRecords(req, res) {
             models.User.findOne({ _id: tenant.ownerUserId, role: "daycare" }).select("name").lean(),
             models.DaycareProfile.findOne({ user: tenant.ownerUserId }).select("daycareName").lean(),
           ]);
-          return [{ id: tenant._id, daycareId: tenant._id, daycareAdmin: owner?.name || "Unknown admin", daycare: profile?.daycareName || tenant.name, activityCount, createdAt: latestActivity?.createdAt || tenant.createdAt }];
+          return [{ id: tenant._id, daycareId: tenant._id, daycareAdmin: owner?.name || "Unknown admin", daycare: profile?.daycareName || daycareName(tenant), activityCount, createdAt: latestActivity?.createdAt || tenant.createdAt }];
         }
         return [];
       }));
@@ -396,7 +412,7 @@ async function listAdminRecords(req, res) {
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 25));
     const total = rows.length;
-    return res.json({ success: true, records: rows.slice((page - 1) * limit, page * limit), pagination: { page, limit, total, pages: Math.ceil(total / limit) }, daycares: tenants.map((tenant) => ({ id: tenant._id, name: tenant.name })) });
+    return res.json({ success: true, records: rows.slice((page - 1) * limit, page * limit), pagination: { page, limit, total, pages: Math.ceil(total / limit) }, daycares: tenants.map((tenant) => ({ id: tenant._id, name: daycareName(tenant), ...(moduleName === "parents" ? { parentCount: parentCountsByDaycare.get(String(tenant._id)) || 0 } : {}) })) });
   } catch (error) {
     console.error(`Platform ${moduleName} listing failed:`, error.message);
     return res.status(503).json({ success: false, message: "Platform records could not be loaded" });
@@ -423,7 +439,7 @@ async function getAdminDaycare(req, res) {
       success: true,
       daycare: {
         id: tenant._id,
-        name: profile?.daycareName || tenant.name || user?.name || "Daycare",
+        name: profile?.daycareName || "Daycare profile incomplete",
         ownerEmail: user?.email || tenant.ownerEmail,
         contactName: user?.name || tenant.name,
         phone: profile?.phone || user?.phone || "",
@@ -456,13 +472,14 @@ async function getAdminDaycare(req, res) {
 async function listAdminDaycareUsers(req, res) {
   if (!mongoose.Types.ObjectId.isValid(req.params.tenantId)) return res.status(400).json({ success: false, message: "Invalid daycare id" });
   try {
-    const tenant = await req.mainModels.Tenant.findById(req.params.tenantId).select("_id name databaseName userLimit status").lean();
+    const tenant = await req.mainModels.Tenant.findById(req.params.tenantId).select("_id name ownerUserId databaseName userLimit status").lean();
     if (!tenant) return res.status(404).json({ success: false, message: "Daycare not found" });
     const memberships = await req.mainModels.TenantMembership.find({ tenant: tenant._id }).select("user email role permissions isActive lastLoginAt createdAt").sort({ createdAt: -1 }).lean();
     const models = getTenantModels(getTenantConnection(tenant.databaseName));
+    const profile = await models.DaycareProfile.findOne({ user: tenant.ownerUserId }).select("daycareName").lean();
     const accounts = await models.User.find({ _id: { $in: memberships.map((membership) => membership.user) } }).select("_id name phone isActive createdAt").lean();
     const accountById = new Map(accounts.map((account) => [String(account._id), account]));
-    return res.json({ success: true, daycare: { id: tenant._id, name: tenant.name, userLimit: Math.max(10, Number(tenant.userLimit) || 10), userCount: memberships.filter((membership) => membership.isActive).length }, users: memberships.map((membership) => {
+    return res.json({ success: true, daycare: { id: tenant._id, name: profile?.daycareName || "Daycare", userLimit: Math.max(10, Number(tenant.userLimit) || 10), userCount: memberships.filter((membership) => membership.isActive).length }, users: memberships.map((membership) => {
       const account = accountById.get(String(membership.user));
       const permissions = membership.permissions instanceof Map ? Object.fromEntries(membership.permissions.entries()) : membership.permissions || {};
       return { id: membership.user, name: account?.name || membership.email, email: membership.email, phone: account?.phone || "", role: membership.role, isActive: Boolean(membership.isActive && account?.isActive), permissions, lastLoginAt: membership.lastLoginAt, createdAt: account?.createdAt || membership.createdAt };
@@ -476,18 +493,19 @@ async function listAdminDaycareUsers(req, res) {
 async function listAdminDaycareActivityLogs(req, res) {
   if (!mongoose.Types.ObjectId.isValid(req.params.tenantId)) return res.status(400).json({ success: false, message: "Invalid daycare id" });
   try {
-    const tenant = await req.mainModels.Tenant.findById(req.params.tenantId).select("_id name databaseName").lean();
+    const tenant = await req.mainModels.Tenant.findById(req.params.tenantId).select("_id name ownerUserId databaseName").lean();
     if (!tenant) return res.status(404).json({ success: false, message: "Daycare not found" });
     const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
     const models = getTenantModels(getTenantConnection(tenant.databaseName));
-    const [logs, total] = await Promise.all([
+    const [logs, total, profile] = await Promise.all([
       models.AuditLog.find({}).sort({ createdAt: -1 }).skip((page - 1) * limit).limit(limit)
         .select("user action module record metadata ipAddress createdAt")
         .populate("user", "name email role").lean(),
       models.AuditLog.countDocuments({}),
+      models.DaycareProfile.findOne({ user: tenant.ownerUserId }).select("daycareName").lean(),
     ]);
-    return res.json({ success: true, daycare: { id: tenant._id, name: tenant.name }, logs: logs.map((item) => ({ id: item._id, user: item.user?.name || "System", email: item.user?.email || "", role: item.user?.role || "unknown", action: item.action, module: item.module, record: item.record, metadata: item.metadata, ipAddress: item.ipAddress || "", createdAt: item.createdAt })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
+    return res.json({ success: true, daycare: { id: tenant._id, name: profile?.daycareName || "Daycare" }, logs: logs.map((item) => ({ id: item._id, user: item.user?.name || "System", email: item.user?.email || "", role: item.user?.role || "unknown", action: item.action, module: item.module, record: item.record, metadata: item.metadata, ipAddress: item.ipAddress || "", createdAt: item.createdAt })), pagination: { page, limit, total, pages: Math.ceil(total / limit) } });
   } catch (error) {
     console.error("Admin daycare activity log listing failed:", error.message);
     return res.status(503).json({ success: false, message: "Daycare activity logs could not be loaded" });

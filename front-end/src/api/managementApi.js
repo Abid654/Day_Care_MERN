@@ -27,4 +27,5 @@ export const uploadManagementProfilePhoto = (module, id, file, token) => apiClie
 });
 export const getManagementProfilePhoto = (module, id, token) => apiClient.get(`/daycare/management/${module}/${id}/photo`, { ...authConfig(token), responseType: "blob" });
 export const recordFeePayment = (id, payment, token) => apiClient.post(`/daycare/management/fees/${id}/payments`, payment, authConfig(token));
+export const updateBookingStatus = (id, status, token) => apiClient.patch(`/daycare/management/bookings/${id}/status`, { status }, authConfig(token));
 export const resetDaycareParentPassword = (id, token) => apiClient.post(`/daycare/management/parents/${id}/reset-password`, {}, authConfig(token));

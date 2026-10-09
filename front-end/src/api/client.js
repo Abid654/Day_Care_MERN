@@ -29,7 +29,8 @@ export const authConfig = (token) => ({
 
 export const getAssetUrl = (path) => {
     if (!path) return "";
-    return path.startsWith("http") ? path : `${API_BASE_URL}${path}`;
+    if (/^(?:https?:\/\/|data:|blob:)/i.test(path)) return path;
+    return `${API_BASE_URL}${path}`;
 };
 
 export default apiClient;

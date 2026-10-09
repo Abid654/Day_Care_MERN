@@ -11,6 +11,7 @@ router.post("/profile/photo", express.raw({ type: ["image/jpeg", "image/png", "i
 router.get("/profile/photo", controller.getParentProfilePhoto);
 router.delete("/profile/photo", controller.deleteParentProfilePhoto);
 router.get("/portal", controller.getParentPortal);
+router.post("/daycares/:tenantId/bookings", controller.createBookingRequest);
 router.get("/portal/:tenantId/children/:childId/photo", controller.getParentChildPhoto);
 router.post("/portal/:tenantId/complaints", controller.createComplaint);
 router.post("/portal/:tenantId/requests", controller.createRequest);

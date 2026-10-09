@@ -7,6 +7,8 @@ parent: {
       required: true,
     },
 
+    parentContact: { type: mongoose.Schema.Types.ObjectId, ref: "DaycareParent" },
+
     daycare: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -16,8 +18,10 @@ parent: {
     child: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Child",
-      required: true,
     },
+
+    childName: { type: String, trim: true, maxlength: 100 },
+    childDateOfBirth: { type: Date },
 
     startDate: {
       type: Date,

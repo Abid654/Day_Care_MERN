@@ -74,6 +74,7 @@ async function getParentPortal(req, res) {
       if (!tenant) continue;
       try {
         const models = getTenantModels(getTenantConnection(tenant.databaseName));
+        const daycareProfile = await models.DaycareProfile.findOne({ user: tenant.ownerUserId }).select("daycareName").lean();
         const parent = await models.DaycareParent.findOne({ _id: link.daycareParent, status: "active" }).select("name email phone address emergencyContactName emergencyContactPhone").lean();
         if (!parent) continue;
         const childFilter = { status: { $ne: "inactive" }, $or: [{ parentContact: parent._id }, { parent: req.user.userId }] };
@@ -85,7 +86,7 @@ async function getParentPortal(req, res) {
           models.Attendance.find({ child: { $in: childIds } }).select("child date status checkIn checkOut notes").populate("child", "name").sort({ date: -1 }).limit(100).lean(),
           models.DailyActivity.find({ child: { $in: childIds }, sharedWithParent: true }).select("child date meals snacks nap toileting activities mood behavior healthObservations medication notes createdAt").populate("child", "name").sort({ date: -1 }).limit(100).lean(),
           models.FeeInvoice.find(parentFilter).select("invoiceNumber child description amount paidAmount dueDate paidAt paymentMethod status transactionReference payments createdAt").populate([{ path: "child", select: "name" }, { path: "payments.receivedBy", select: "name" }]).sort({ dueDate: -1 }).limit(100).lean(),
-          models.Booking.find({ parent: req.user.userId, daycare: tenant.ownerUserId, child: { $in: childIds } }).select("child startDate endDate supportType status notes createdAt").populate("child", "name").sort({ createdAt: -1 }).limit(100).lean(),
+          models.Booking.find({ parent: req.user.userId, daycare: tenant.ownerUserId }).select("child childName childDateOfBirth startDate endDate supportType status notes createdAt").populate("child", "name").sort({ createdAt: -1 }).limit(100).lean(),
           models.Payment.find({ parent: req.user.userId, daycare: tenant.ownerUserId }).select("booking amount paymentMethod status transactionId paidAt createdAt").sort({ createdAt: -1 }).limit(100).lean(),
           models.Complaint.find({ parent: parent._id }).select("complaintNumber subject description priority status response history createdAt updatedAt").sort({ createdAt: -1 }).limit(100).lean(),
           models.ParentRequest.find({ parent: parent._id }).select("requestType subject description status adminRemarks createdAt updatedAt").sort({ createdAt: -1 }).limit(100).lean(),
@@ -94,7 +95,7 @@ async function getParentPortal(req, res) {
           models.DaycareEvent.find({ status: "scheduled", date: { $gte: new Date() }, $or: [{ audience: { $in: ["everyone", "parents"] } }, ...(classIds.length ? [{ classGroup: { $in: classIds }, audience: "class" }] : [])] }).select("name description date startTime endTime location audience reminderAt").sort({ date: 1 }).limit(50).lean(),
         ]);
         daycares.push({
-          id: tenant._id, name: tenant.name, listingStatus: tenant.listingStatus,
+          id: tenant._id, name: daycareProfile?.daycareName || "Daycare", listingStatus: tenant.listingStatus,
           parent, children, attendance, activities, invoices, bookings, payments, complaints, requests, notifications, announcements, events,
         });
       } catch (error) {
@@ -106,6 +107,47 @@ async function getParentPortal(req, res) {
   } catch (error) {
     console.error("Parent portal read failed:", error.message);
     return res.status(503).json({ success: false, message: "Family information is temporarily unavailable" });
+  }
+}
+
+async function createBookingRequest(req, res) {
+  try {
+    const tenantId = req.params.tenantId;
+    if (!/^[a-f\d]{24}$/i.test(tenantId)) return res.status(400).json({ success: false, message: "Invalid daycare listing" });
+    const tenant = await req.mainModels.Tenant.findOne({ _id: tenantId, status: "active", listingStatus: "approved" }).select("_id name ownerUserId databaseName").lean();
+    if (!tenant) return res.status(404).json({ success: false, message: "This daycare is not accepting booking requests" });
+    const name = typeof req.body.childName === "string" ? req.body.childName.trim() : "";
+    const birthDate = new Date(req.body.childDateOfBirth);
+    const startDate = new Date(req.body.startDate);
+    const endDate = new Date(req.body.endDate);
+    const supportType = req.body.supportType;
+    const notes = typeof req.body.notes === "string" ? req.body.notes.trim() : "";
+    if (name.length < 2 || name.length > 100 || Number.isNaN(birthDate.getTime()) || birthDate >= new Date()) return res.status(400).json({ success: false, message: "Enter the child's name and a valid date of birth" });
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || startDate < new Date(new Date().setHours(0, 0, 0, 0)) || endDate < startDate) return res.status(400).json({ success: false, message: "Choose a valid future start date and end date" });
+    if (!["full-time", "part-time"].includes(supportType)) return res.status(400).json({ success: false, message: "Choose full-time or part-time care" });
+    if (notes.length > 1000) return res.status(400).json({ success: false, message: "Notes must be 1,000 characters or fewer" });
+    const parentUser = await req.mainModels.User.findOne({ _id: req.user.userId, role: "parent", isActive: true }).select("name email phone address").lean();
+    if (!parentUser) return res.status(404).json({ success: false, message: "Parent account not found" });
+    const models = getTenantModels(getTenantConnection(tenant.databaseName));
+    const daycareProfile = await models.DaycareProfile.findOne({ user: tenant.ownerUserId }).select("daycareName").lean();
+    const linkedParent = await models.DaycareParent.findOneAndUpdate(
+      { email: parentUser.email },
+      { $set: { name: parentUser.name, email: parentUser.email, phone: parentUser.phone, address: parentUser.address || "", parentUser: parentUser._id, status: "active" }, $setOnInsert: { createdBy: tenant.ownerUserId } },
+      { new: true, upsert: true, runValidators: true },
+    );
+    await req.mainModels.ParentTenantLink.findOneAndUpdate(
+      { tenant: tenant._id, email: parentUser.email },
+      { $set: { parentUser: parentUser._id, daycareParent: linkedParent._id, isActive: true }, $setOnInsert: { tenant: tenant._id } },
+      { upsert: true, new: true, runValidators: true },
+    );
+    const booking = await models.Booking.create({
+      parent: parentUser._id, parentContact: linkedParent._id, daycare: tenant.ownerUserId, childName: name, childDateOfBirth: birthDate,
+      startDate, endDate, supportType, status: "pending", notes,
+    });
+    return res.status(201).json({ success: true, message: "Booking request sent. It is pending daycare review.", booking: { ...booking.toObject(), daycareName: daycareProfile?.daycareName || "Daycare" } });
+  } catch (error) {
+    console.error("Parent booking request failed:", error.message);
+    return res.status(503).json({ success: false, message: "Booking request could not be submitted right now" });
   }
 }
 
@@ -221,4 +263,4 @@ async function updateParentProfile(req, res) {
   }
 }
 
-module.exports = { getParentPortal, getParentChildPhoto, createComplaint, createRequest, getParentProfile, updateParentProfile, getParentProfilePhoto, uploadParentProfilePhoto, deleteParentProfilePhoto };
+module.exports = { getParentPortal, getParentChildPhoto, createComplaint, createRequest, createBookingRequest, getParentProfile, updateParentProfile, getParentProfilePhoto, uploadParentProfilePhoto, deleteParentProfilePhoto };

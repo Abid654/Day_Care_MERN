@@ -7,7 +7,7 @@ const { getMainModels, getTenantConnection, getTenantModels, initializeTenantDat
 const registerUser = async (req, res) => {
   let tenant = null;
   try {
-    const { name, email, password, confirmPassword, phone, role } = req.body;
+    const { name, email, password, confirmPassword, phone, address, role } = req.body;
     const validation = validateRegisterData(req.body);
     if (!validation.isValid) return res.status(400).json({ success: false, message: "Validation failed", errors: validation.errors });
     if (password !== confirmPassword) return res.status(400).json({ success: false, message: "Passwords do not match" });
@@ -21,6 +21,7 @@ const registerUser = async (req, res) => {
     const userDocument = { _id: userId, name: name.trim(), email: cleanEmail, password: hashedPassword, phone: phone.trim(), role };
 
     if (role === "parent") {
+      userDocument.address = address.trim();
       const user = await mainModels.User.create(userDocument);
       await mainModels.ParentTenantLink.updateMany({ email: cleanEmail, isActive: true, parentUser: null }, { $set: { parentUser: user._id } })
         .catch((error) => console.error("Parent daycare-link sync failed:", error.message));
@@ -97,7 +98,7 @@ const loginUser = async (req, res) => {
 };
 
 function publicUser(user) {
-  return { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role, isActive: user.isActive };
+  return { id: user._id, name: user.name, email: user.email, phone: user.phone, profilePhoto: user.profilePhoto || "", role: user.role, isActive: user.isActive };
 }
 
 module.exports = { registerUser, loginUser };

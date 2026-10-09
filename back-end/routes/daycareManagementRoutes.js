@@ -24,6 +24,7 @@ router.get("/documents/:recordId/file", requireManagementPermission("read"), con
 router.get("/:module/:recordId/photo", requireManagementPermission("read"), controller.getProfilePhoto);
 router.post("/:module/:recordId/photo", requireManagementPermission("update"), express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: "3mb" }), controller.uploadProfilePhoto);
 router.post("/fees/:recordId/payments", requireManagementPermission("update"), controller.recordFeePayment);
+router.patch("/bookings/:recordId/status", requireManagementPermission("update"), controller.updateBookingStatus);
 router.get("/:module", requireManagementPermission("read"), controller.listRecords);
 router.post("/:module", requireManagementPermission("create"), controller.createRecord);
 router.put("/:module/:recordId", requireManagementPermission("update"), controller.updateRecord);

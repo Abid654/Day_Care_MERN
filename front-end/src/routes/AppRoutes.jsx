@@ -5,6 +5,8 @@ import ProtectedRoute from "./ProtectedRoute";
 import Login from "../pages/Login";
 import Register from "../pages/Register";
 const ParentDashboard = lazy(() => import("../pages/ParentDashboard"));
+const ParentBookingsPage = lazy(() => import("../pages/ParentBookingsPage"));
+const ParentDaycaresPage = lazy(() => import("../pages/ParentDaycaresPage"));
 const DaycareDashboard = lazy(() => import("../pages/DaycareDashboard"));
 const DaycareManagementDashboard = lazy(() => import("../pages/DaycareManagementDashboard"));
 const DaycareAdminProfile = lazy(() => import("../pages/DaycareAdminProfile"));
@@ -25,6 +27,8 @@ const AppRoutes = () => {
         <Route path="/admin/:module" element={<ProtectedRoute roles={["admin"]}><Suspense fallback={<RouteLoading />}><AdminDashboard /></Suspense></ProtectedRoute>} />
         <Route path="/register" element={<Register />} />
         <Route path="/parent/dashboard" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><ParentDashboard /></Suspense></ProtectedRoute>} />
+        <Route path="/parent/bookings" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><ParentBookingsPage /></Suspense></ProtectedRoute>} />
+        <Route path="/parent/daycares" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><ParentDaycaresPage /></Suspense></ProtectedRoute>} />
         <Route path="/daycares/:daycareId" element={<ProtectedRoute roles={["parent"]}><Suspense fallback={<RouteLoading />}><DaycareProfilePage /></Suspense></ProtectedRoute>} />
         <Route path="/daycare/dashboard" element={<ProtectedRoute roles={["daycare", "manager", "caregiver", "nurse", "support"]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />
         <Route path="/daycare/dashboard/:module" element={<ProtectedRoute roles={["daycare", "manager", "caregiver", "nurse", "support"]}><Suspense fallback={<RouteLoading />}><DaycareManagementDashboard /></Suspense></ProtectedRoute>} />
