@@ -14,6 +14,22 @@ function App() {
     window.addEventListener("auth:expired", handleExpiredSession);
     return () => window.removeEventListener("auth:expired", handleExpiredSession);
   }, [dispatch]);
+  useEffect(() => {
+    const openPickerForDateTimeInput = (event) => {
+      const input = event.target;
+      if (!(input instanceof HTMLInputElement) || !["date", "time", "datetime-local"].includes(input.type)) return;
+      if (typeof input.showPicker !== "function") return;
+
+      try {
+        input.showPicker();
+      } catch {
+        // The picker may already be open or unsupported by the browser.
+      }
+    };
+
+    document.addEventListener("click", openPickerForDateTimeInput, true);
+    return () => document.removeEventListener("click", openPickerForDateTimeInput, true);
+  }, []);
   return <AppRoutes />;
 }
 

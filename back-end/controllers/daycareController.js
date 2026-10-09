@@ -96,7 +96,7 @@ async function getPublicDaycare(req, res) {
 async function getMyProfile(req, res) {
   try {
     const profile = await req.models.DaycareProfile.findOne({ user: req.user.userId }).lean();
-    return res.json({ success: true, profile, listingStatus: req.tenant.listingStatus || "pending" });
+    return res.json({ success: true, profile, listingStatus: req.tenant.listingStatus || "pending", adminRemarks: req.tenant.listingStatus === "needs-info" ? req.tenant.adminRemarks || "" : "" });
   } catch (error) {
     console.error("Daycare profile read error:", error.message);
     return res.status(503).json({ success: false, message: "Profile is temporarily unavailable" });

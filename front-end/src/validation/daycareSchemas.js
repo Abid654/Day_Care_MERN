@@ -31,6 +31,7 @@ export const daycareStepSchemas = [
             .required("Monthly fee is required."),
         paymentOptions: Yup.string().max(300, "Payment options must be 300 characters or fewer."),
     }),
+    Yup.object({}),
 ];
 
 export const daycareStepFields = [
@@ -38,4 +39,5 @@ export const daycareStepFields = [
     ["experienceYears", "qualifications", "training"],
     ["services", "facilities", "medicalStaffCount", "nursingStaffCount"],
     ["fee", "paymentOptions"],
+    [],
 ];
