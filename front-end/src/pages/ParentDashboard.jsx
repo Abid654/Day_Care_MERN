@@ -4,10 +4,10 @@ import { useDispatch } from "react-redux";
 import { toast } from "react-toastify";
 import { getAssetUrl } from "../api/client";
 import { getDaycareListings } from "../api/daycareApi";
-import { createParentComplaint, createParentRequest, getParentChildPhoto, getParentPortal } from "../api/parentApi";
+import { createParentComplaint, createParentRequest, deleteParentProfilePhoto, getParentChildPhoto, getParentPortal, getParentProfile, getParentProfilePhoto, updateParentProfile, uploadParentProfilePhoto } from "../api/parentApi";
 import { connectRealtime, disconnectRealtime } from "../api/realtime";
-import { clearCredentials } from "../redux/slices/authSlice";
-import { Bell, Building2, CalendarDays, ChevronRight, Clock3, CreditCard, Eye, Heart, LogOut, MapPin, Printer, ReceiptText, Search, ShieldCheck, Users } from "lucide-react";
+import { clearCredentials, updateUser } from "../redux/slices/authSlice";
+import { Bell, Building2, CalendarDays, ChevronRight, Clock3, CreditCard, Eye, Heart, LogOut, MapPin, Printer, ReceiptText, Search, ShieldCheck, Users, X } from "lucide-react";
 
 const money = (value) => `Rs. ${Number(value || 0).toLocaleString()}`;
 const age = (value) => {
@@ -45,11 +45,50 @@ const ParentDashboard = () => {
     const [areaFilter, setAreaFilter] = useState("");
     const [careType, setCareType] = useState("");
     const [submitting, setSubmitting] = useState("");
+    const [profileOpen, setProfileOpenState] = useState(false);
+    const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+    const setProfileOpen = (open) => { if (open) setAccountMenuOpen(true); else { setProfileOpenState(false); setAccountMenuOpen(false); } };
+    const [profileSaving, setProfileSaving] = useState(false);
+    const [photoSaving, setPhotoSaving] = useState(false);
+    const [profilePhotoUrl, setProfilePhotoUrl] = useState("");
+    const [profileForm, setProfileForm] = useState({ name: "", phone: "", address: "", area: "", emergencyContactName: "", emergencyContactPhone: "", emergencyContactRelationship: "", emergencyContactDetails: "", childcareType: "", careStartTime: "", careEndTime: "" });
     const [form, setForm] = useState({ tenantId: "", childId: "", subject: "", description: "", requestType: "other", kind: "request" });
     const { user, token } = useMemo(() => {
         try { return { user: JSON.parse(localStorage.getItem("user") || "null"), token: localStorage.getItem("token") }; }
         catch { return { user: null, token: null }; }
     }, []);
+    const [profileUser, setProfileUser] = useState(user);
+
+    useEffect(() => {
+        if (!token || user?.role !== "parent") return;
+        getParentProfile(token).then(({ data }) => {
+            const savedProfile = { ...profileForm, ...data.profile };
+            setProfileUser(savedProfile);
+            setProfileForm(savedProfile);
+            localStorage.setItem("user", JSON.stringify({ ...user, profilePhoto: data.profile.profilePhoto || "" }));
+        }).catch(() => toast.error("Could not load your profile details."));
+    }, [token, user]);
+
+    useEffect(() => {
+        const handlePhotoChange = (event) => setProfileUser((current) => ({ ...current, profilePhoto: event.detail || "" }));
+        window.addEventListener("parent:profile-photo-updated", handlePhotoChange);
+        return () => window.removeEventListener("parent:profile-photo-updated", handlePhotoChange);
+    }, []);
+
+    useEffect(() => {
+        let active = true;
+        let objectUrl = "";
+        if (!token || !profileUser?.profilePhoto) {
+            setProfilePhotoUrl("");
+            return undefined;
+        }
+        getParentProfilePhoto(token).then(({ data }) => {
+            if (!active) return;
+            objectUrl = URL.createObjectURL(data);
+            setProfilePhotoUrl(objectUrl);
+        }).catch(() => { if (active) setProfilePhotoUrl(""); });
+        return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    }, [profileUser?.profilePhoto, token]);
 
     const loadPortal = useCallback(async () => {
         if (!token || user?.role !== "parent") return;
@@ -109,10 +148,63 @@ const ParentDashboard = () => {
     ])].sort((a, b) => new Date(b.sentAt || b.date || b.createdAt || 0) - new Date(a.sentAt || a.date || a.createdAt || 0));
 
     if (!token || user?.role !== "parent") return null;
-    const firstName = user.name?.trim().split(/\s+/)[0] || "there";
-    const initials = user.name?.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "P";
+    const firstName = profileUser.name?.trim().split(/\s+/)[0] || "there";
+    const initials = profileUser.name?.trim().split(/\s+/).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "P";
     const today = new Intl.DateTimeFormat("en", { weekday: "long", month: "long", day: "numeric" }).format(new Date());
     const handleLogout = () => { localStorage.removeItem("token"); localStorage.removeItem("user"); dispatch(clearCredentials()); navigate("/", { replace: true }); };
+    const saveParentProfile = async (event) => {
+        event.preventDefault();
+        setProfileSaving(true);
+        try {
+            const { data } = await updateParentProfile(profileForm, token);
+            localStorage.setItem("user", JSON.stringify(data.user));
+            dispatch(updateUser(data.user));
+            setProfileUser(data.user);
+            setProfileForm({ ...profileForm, ...data.user });
+            setProfileOpen(false);
+            toast.success("Profile updated successfully.");
+        } catch (error) {
+            toast.error(error.response?.data?.message || "Could not update your profile.");
+        } finally {
+            setProfileSaving(false);
+        }
+    };
+    const saveProfilePhoto = async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        if (!file) return;
+        if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) {
+            toast.error("Choose a JPG, PNG, or WebP image up to 3 MB.");
+            return;
+        }
+        setPhotoSaving(true);
+        try {
+            const { data } = await uploadParentProfilePhoto(file, token);
+            const updatedUser = { ...profileUser, profilePhoto: data.profilePhoto };
+            setProfileUser(updatedUser);
+            localStorage.setItem("user", JSON.stringify({ ...user, profilePhoto: data.profilePhoto }));
+            dispatch(updateUser({ profilePhoto: data.profilePhoto }));
+            toast.success("Profile photo uploaded.");
+        } catch (error) {
+            toast.error(error.response?.data?.message || "Could not upload your profile photo.");
+        } finally {
+            setPhotoSaving(false);
+        }
+    };
+    const removeProfilePhoto = async () => {
+        setPhotoSaving(true);
+        try {
+            await deleteParentProfilePhoto(token);
+            setProfileUser((current) => ({ ...current, profilePhoto: "" }));
+            localStorage.setItem("user", JSON.stringify({ ...user, profilePhoto: "" }));
+            dispatch(updateUser({ profilePhoto: "" }));
+            toast.success("Profile photo removed.");
+        } catch (error) {
+            toast.error(error.response?.data?.message || "Could not remove your profile photo.");
+        } finally {
+            setPhotoSaving(false);
+        }
+    };
     const submitFamilyItem = async (event) => {
         event.preventDefault();
         if (!form.tenantId) return toast.error("Select a linked daycare first.");
@@ -132,7 +224,8 @@ const ParentDashboard = () => {
         <header className="sticky top-0 z-20 border-b border-slate-100 bg-white/95 backdrop-blur"><div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-4 sm:px-6 lg:px-8">
             <a href="#overview" className="flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-sky-500 to-indigo-600 text-xl text-white shadow-md shadow-sky-200">ðŸ§¸</div><div><p className="text-lg font-bold leading-tight">Online Daycare</p><p className="text-xs text-slate-500">Family portal</p></div></a>
             <nav className="hidden items-center gap-7 text-sm font-semibold md:flex"><a className="text-sky-600" href="#overview">Overview</a><a className="text-slate-500 hover:text-sky-600" href="#children">My children</a><a className="text-slate-500 hover:text-sky-600" href="#appointments">Appointments</a><a className="text-slate-500 hover:text-sky-600" href="#billing">Billing</a></nav>
-            <div className="flex items-center gap-2 sm:gap-4"><a href="#updates" aria-label="Notifications" className="relative rounded-xl p-2.5 text-slate-500 hover:bg-sky-50 hover:text-sky-600"><Bell size={19} />{alerts.length > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" />}</a><div className="hidden h-8 w-px bg-slate-200 sm:block" /><div className="flex items-center gap-2"><div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 font-bold text-sky-700">{initials}</div><span className="hidden max-w-32 truncate text-sm font-semibold sm:block">{user.name}</span></div><button onClick={handleLogout} aria-label="Sign out" title="Sign out" className="rounded-xl p-2.5 text-slate-500 hover:bg-rose-50 hover:text-rose-600"><LogOut size={18} /></button></div>
+            <div className="flex items-center gap-2 sm:gap-4"><a href="#updates" aria-label="Notifications" className="relative rounded-xl p-2.5 text-slate-500 hover:bg-sky-50 hover:text-sky-600"><Bell size={19} />{alerts.length > 0 && <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-500" />}</a><div className="hidden h-8 w-px bg-slate-200 sm:block" /><button type="button" onClick={() => setProfileOpen(true)} aria-label="Edit profile" title="Edit profile" className="flex items-center gap-2 rounded-xl p-1.5 text-left transition hover:bg-sky-50">{profilePhotoUrl ? <img src={profilePhotoUrl} alt="" className="h-10 w-10 rounded-full object-cover" /> : <div className="flex h-10 w-10 items-center justify-center rounded-full bg-sky-100 font-bold text-sky-700">{initials}</div>}<span className="hidden max-w-32 truncate text-sm font-semibold sm:block">{profileUser.name}</span><span className="hidden rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 lg:inline">Profile</span></button><button onClick={handleLogout} aria-label="Sign out" title="Sign out" className="rounded-xl p-2.5 text-slate-500 hover:bg-rose-50 hover:text-rose-600"><LogOut size={18} /></button></div>
+            {accountMenuOpen && <><button type="button" aria-label="Close account menu" onClick={() => setAccountMenuOpen(false)} className="fixed inset-0 z-30 cursor-default" /><div className="fixed right-4 top-[4.5rem] z-40 w-56 overflow-hidden rounded-2xl border border-slate-200 bg-white p-2 shadow-xl sm:right-8"><div className="border-b border-slate-100 px-3 py-2"><p className="truncate text-sm font-bold text-slate-800">{profileUser.name}</p><p className="truncate text-xs text-slate-500">{profileUser.email}</p></div><button type="button" onClick={() => { setAccountMenuOpen(false); setProfileOpenState(true); }} className="mt-1 flex w-full items-center rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-700 transition hover:bg-sky-50 hover:text-sky-700">Profile</button><button type="button" onClick={() => { setAccountMenuOpen(false); setProfileOpenState(true); }} className="flex w-full items-center rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-slate-700 transition hover:bg-sky-50 hover:text-sky-700">Settings</button><button type="button" onClick={handleLogout} className="mt-1 flex w-full items-center gap-2 border-t border-slate-100 px-3 py-2.5 text-left text-sm font-semibold text-rose-600 transition hover:bg-rose-50"><LogOut size={16} />Log out</button></div></>}
         </div></header>
 
         <main id="overview" className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-10">
@@ -166,6 +259,8 @@ const ParentDashboard = () => {
                 <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm sm:p-7"><SectionTitle eyebrow="Your messages" title="Requests & complaints" subtitle="Track messages and provider responses." icon={<Clock3 size={19} />} />{portalLoading ? <InlineLoading /> : linkedDaycares.some((center) => center.requests.length || center.complaints.length) ? <div className="space-y-3">{linkedDaycares.flatMap((center) => [...center.requests.map((item) => ({ ...item, messageType: "Request" })), ...center.complaints.map((item) => ({ ...item, messageType: "Complaint" }))].map((item) => ({ ...item, daycareName: center.name }))).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).map((item) => <article key={`${item.daycareName}-${item._id}`} className="rounded-2xl border border-slate-100 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="mr-2 rounded-full bg-indigo-50 px-2 py-1 text-[11px] font-bold text-indigo-700">{item.messageType}</span><span className="font-semibold">{item.subject}</span></div><Status value={item.status} /></div><p className="mt-2 text-sm text-slate-600">{item.description}</p><p className="mt-1 text-xs text-slate-500">{item.daycareName} Â· {date(item.createdAt)}</p>{(item.response || item.adminRemarks) && <p className="mt-3 rounded-xl bg-emerald-50 p-3 text-sm text-emerald-800">Provider: {item.response || item.adminRemarks}</p>}</article>)}</div> : <Empty title="No messages sent" text="Your daycare requests and complaints will show here with their latest status." />}</div></section>
 
             <section className="mt-6 grid gap-4 md:grid-cols-3"><FeatureCard icon={<Heart size={20} />} title="Family care" text="Your linked child profiles are kept private to your daycare." color="rose" /><FeatureCard icon={<ShieldCheck size={20} />} title="Protected portal" text="Family information is loaded from your authenticated account." color="emerald" /><a href="#billing" className="rounded-2xl outline-none focus:ring-4 focus:ring-indigo-100"><FeatureCard icon={<CreditCard size={20} />} title="Payments & receipts" text="Review invoices and recorded payment history." color="indigo" /></a></section>
+            {profileOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" onMouseDown={(event) => event.target === event.currentTarget && setProfileOpen(false)}><section role="dialog" aria-modal="true" aria-labelledby="parent-profile-title" className="max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl sm:p-8"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-wider text-sky-600">Family account</p><h2 id="parent-profile-title" className="mt-1 text-2xl font-extrabold text-slate-900">My profile</h2><p className="mt-1 text-sm text-slate-500">Add your contact details and the care schedule you need.</p></div><button type="button" onClick={() => setProfileOpen(false)} aria-label="Close profile" className="rounded-xl p-2 text-slate-500 transition hover:bg-slate-100"><X size={19} /></button></div><form onSubmit={saveParentProfile} className="mt-6 space-y-5"><div><h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">Parent details</h3><div className="grid gap-4 sm:grid-cols-2"><ProfileField label="Full name" required value={profileForm.name} onChange={(value) => setProfileForm((current) => ({ ...current, name: value }))} maxLength={50} /><ProfileField label="Contact number" type="tel" required value={profileForm.phone} onChange={(value) => setProfileForm((current) => ({ ...current, phone: value }))} maxLength={20} /><label className="block text-sm font-semibold text-slate-700 sm:col-span-2">Email address<input readOnly value={profileUser.email || ""} className="mt-1.5 w-full cursor-not-allowed rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 font-normal text-slate-500" /><span className="mt-1 block text-xs font-normal text-slate-400">Email address cannot be changed here.</span></label><ProfileField label="Home address" required value={profileForm.address} onChange={(value) => setProfileForm((current) => ({ ...current, address: value }))} maxLength={500} /><ProfileField label="Area / city" required value={profileForm.area} onChange={(value) => setProfileForm((current) => ({ ...current, area: value }))} maxLength={120} /></div></div><div><h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">Emergency contact</h3><div className="grid gap-4 sm:grid-cols-2"><ProfileField label="Contact person name" required value={profileForm.emergencyContactName} onChange={(value) => setProfileForm((current) => ({ ...current, emergencyContactName: value }))} maxLength={100} /><ProfileField label="Emergency contact number" type="tel" required value={profileForm.emergencyContactPhone} onChange={(value) => setProfileForm((current) => ({ ...current, emergencyContactPhone: value }))} maxLength={30} /><ProfileField label="Relationship" required value={profileForm.emergencyContactRelationship} onChange={(value) => setProfileForm((current) => ({ ...current, emergencyContactRelationship: value }))} maxLength={80} /><label className="block text-sm font-semibold text-slate-700 sm:col-span-2">Emergency contact details<textarea required maxLength={500} value={profileForm.emergencyContactDetails} onChange={(event) => setProfileForm((current) => ({ ...current, emergencyContactDetails: event.target.value }))} placeholder="Any additional details to use in an emergency" rows={3} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-3 font-normal outline-none focus:border-sky-400" /></label></div></div><div><h3 className="mb-3 text-sm font-bold uppercase tracking-wide text-slate-500">Childcare needs</h3><div className="grid gap-4 sm:grid-cols-3"><label className="block text-sm font-semibold text-slate-700">Support type<select required value={profileForm.childcareType} onChange={(event) => setProfileForm((current) => ({ ...current, childcareType: event.target.value }))} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-normal outline-none focus:border-sky-400"><option value="">Select full or part time</option><option value="full-time">Full time</option><option value="part-time">Part time</option></select></label><ProfileField label="Care needed from" type="time" required value={profileForm.careStartTime} onChange={(value) => setProfileForm((current) => ({ ...current, careStartTime: value }))} /><ProfileField label="Care needed until" type="time" required value={profileForm.careEndTime} onChange={(value) => setProfileForm((current) => ({ ...current, careEndTime: value }))} /></div></div><div className="flex justify-end gap-3 border-t border-slate-100 pt-4"><button type="button" onClick={() => setProfileOpen(false)} className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-600">Cancel</button><button type="submit" disabled={profileSaving} className="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:opacity-60">{profileSaving ? "Saving…" : "Save profile"}</button></div></form></section></div>}
+            <section className="mb-7 flex flex-col gap-4 rounded-3xl border border-slate-100 bg-white p-6 shadow-sm sm:flex-row sm:items-center sm:justify-between sm:p-7"><div className="flex items-center gap-4"><div className="relative">{profilePhotoUrl ? <img src={profilePhotoUrl} alt="Parent profile" className="h-20 w-20 rounded-full object-cover" /> : <div className="flex h-20 w-20 items-center justify-center rounded-full bg-sky-100 text-xl font-bold text-sky-700">{initials}</div>}{profilePhotoUrl && <button type="button" onClick={removeProfilePhoto} disabled={photoSaving} aria-label="Remove profile photo" title="Remove photo" className="absolute -right-1 -top-1 flex h-7 w-7 items-center justify-center rounded-full bg-rose-600 text-white shadow hover:bg-rose-700 disabled:opacity-50"><X size={15} /></button>}</div><div><p className="text-xs font-bold uppercase tracking-wider text-sky-600">Parent profile</p><h2 className="mt-1 text-lg font-bold text-slate-900">Profile photo</h2><p className="mt-1 text-sm text-slate-500">JPG, PNG, or WebP · up to 3 MB</p></div></div><label className="inline-flex cursor-pointer items-center justify-center rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-indigo-700 sm:mr-auto">{photoSaving ? "Please wait…" : profilePhotoUrl ? "Change photo" : "Upload photo"}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={photoSaving} onChange={saveProfilePhoto} className="sr-only" /></label></section>
         </main>
     </div>;
 };
@@ -174,6 +269,51 @@ const colors = { sky: "bg-sky-50 text-sky-600", indigo: "bg-indigo-50 text-indig
 const QuickAction = ({ href, icon, label }) => <a href={href} className="inline-flex items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-sky-200 hover:bg-sky-50 hover:text-sky-700">{icon}{label}</a>;
 const SummaryCard = ({ icon, label, value, detail, color }) => <div className="rounded-3xl border border-slate-100 bg-white p-5 shadow-sm sm:p-6"><div className="mb-5 flex items-center justify-between"><span className="text-sm font-medium text-slate-500">{label}</span><span className={`flex h-10 w-10 items-center justify-center rounded-xl ${colors[color]}`}>{icon}</span></div><p className="text-2xl font-extrabold text-slate-900">{value}</p><p className="mt-1 text-xs text-slate-500">{detail}</p></div>;
 const SectionTitle = ({ eyebrow, title, subtitle, icon }) => <div className="mb-5 flex items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-sky-600">{eyebrow}</p><h2 className="mt-1 text-xl font-bold text-slate-900">{title}</h2><p className="mt-1 text-sm text-slate-500">{subtitle}</p></div><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-600">{icon}</span></div>;
+const ProfileField = ({ label, value, onChange, type = "text", required = false, maxLength }) => <>{label === "Full name" && <ParentProfilePhotoField />}<label className="block text-sm font-semibold text-slate-700">{label}{label === "Relationship" ? <select required={required} value={value || ""} onChange={(event) => onChange(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-3 py-3 font-normal outline-none focus:border-sky-400"><option value="">Select relationship</option>{["Mother", "Father", "Grandmother", "Grandfather", "Aunt", "Uncle", "Sibling", "Other"].map((item) => <option key={item} value={item}>{item}</option>)}</select> : <input type={type} required={required} maxLength={maxLength} value={value || ""} onChange={(event) => onChange(event.target.value)} className="mt-1.5 w-full rounded-xl border border-slate-200 px-3 py-3 font-normal outline-none focus:border-sky-400" />}</label></>;
+const ParentProfilePhotoField = () => {
+    const dispatch = useDispatch();
+    const [photoUrl, setPhotoUrl] = useState("");
+    const [saving, setSaving] = useState(false);
+    const [photoKey, setPhotoKey] = useState(() => { try { return JSON.parse(localStorage.getItem("user") || "{}").profilePhoto || ""; } catch { return ""; } });
+    const token = localStorage.getItem("token");
+    const user = (() => { try { return JSON.parse(localStorage.getItem("user") || "{}"); } catch { return {}; } })();
+    useEffect(() => {
+        let active = true;
+        let objectUrl = "";
+        if (!photoKey || !token) { setPhotoUrl(""); return undefined; }
+        getParentProfilePhoto(token).then(({ data }) => { if (active) { objectUrl = URL.createObjectURL(data); setPhotoUrl(objectUrl); } }).catch(() => { if (active) setPhotoUrl(""); });
+        return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+    }, [photoKey, token]);
+    const upload = async (event) => {
+        const file = event.target.files?.[0];
+        event.target.value = "";
+        if (!file) return;
+        if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 3 * 1024 * 1024) return toast.error("Choose a JPG, PNG, or WebP image up to 3 MB.");
+        setSaving(true);
+        try {
+            const { data } = await uploadParentProfilePhoto(file, token);
+            setPhotoKey(data.profilePhoto);
+            localStorage.setItem("user", JSON.stringify({ ...user, profilePhoto: data.profilePhoto }));
+            dispatch(updateUser({ profilePhoto: data.profilePhoto }));
+            window.dispatchEvent(new CustomEvent("parent:profile-photo-updated", { detail: data.profilePhoto }));
+            toast.success("Profile photo uploaded.");
+        } catch (error) { toast.error(error.response?.data?.message || "Could not upload your profile photo."); }
+        finally { setSaving(false); }
+    };
+    const remove = async () => {
+        setSaving(true);
+        try {
+            await deleteParentProfilePhoto(token);
+            setPhotoKey("");
+            localStorage.setItem("user", JSON.stringify({ ...user, profilePhoto: "" }));
+            dispatch(updateUser({ profilePhoto: "" }));
+            window.dispatchEvent(new CustomEvent("parent:profile-photo-updated", { detail: "" }));
+            toast.success("Profile photo removed.");
+        } catch (error) { toast.error(error.response?.data?.message || "Could not remove your profile photo."); }
+        finally { setSaving(false); }
+    };
+    return <div className="flex items-center gap-4 rounded-2xl bg-slate-50 p-4 sm:col-span-2"><div className="relative">{photoUrl ? <img src={photoUrl} alt="Parent profile" className="h-20 w-20 rounded-full object-cover ring-2 ring-white" /> : <div className="flex h-20 w-20 items-center justify-center rounded-full bg-sky-100 text-xl font-bold text-sky-700 ring-2 ring-white">P</div>}{photoUrl && <button type="button" onClick={remove} disabled={saving} aria-label="Remove profile photo" title="Remove photo" className="absolute -right-1 -top-1 flex h-7 w-7 items-center justify-center rounded-full bg-rose-600 text-white shadow hover:bg-rose-700 disabled:opacity-50"><X size={15} /></button>}</div><div><p className="font-bold text-slate-800">Profile photo</p><p className="mt-1 text-xs text-slate-500">JPG, PNG, or WebP · up to 3 MB</p><label className="mt-2 inline-flex cursor-pointer items-center rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-indigo-700">{saving ? "Please wait…" : photoUrl ? "Change photo" : "Upload photo"}<input type="file" accept="image/jpeg,image/png,image/webp" disabled={saving} onChange={upload} className="sr-only" /></label></div></div>;
+};
 const Empty = ({ title, text }) => <div className="rounded-2xl bg-slate-50 px-5 py-8 text-center"><h3 className="font-semibold text-slate-800">{title}</h3><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">{text}</p></div>;
 const InlineLoading = () => <div className="animate-pulse space-y-3"><div className="h-16 rounded-xl bg-slate-100" /><div className="h-16 rounded-xl bg-slate-100" /></div>;
 const ParentChildPhoto = ({ child, token }) => {
